@@ -111,6 +111,12 @@ fn main() {
     };
     let out: String = arg(&args, "--out").unwrap_or_else(|| "runs".to_string());
     let quiet = args.iter().any(|a| a == "--quiet");
+    // --tree FILE: dump the beam genealogy, one line per level: "L pi,m,score,roll ..."
+    // for every node kept at that level (pi = index of its parent in the previous level,
+    // roll = rollout length from the node). For visualizing how lineages branch and die.
+    let tree_path: Option<String> = arg(&args, "--tree");
+    let mut tree: Option<std::io::BufWriter<std::fs::File>> =
+        tree_path.as_ref().map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("create tree file")));
 
     let mut prefix: Vec<u8> = Vec::new();
     if let Some(path) = arg::<String>(&args, "--prefix") {
@@ -201,12 +207,12 @@ fn main() {
         if let Some(f) = forced {
             best = (scored[f].3, level + 1, 0, scored[f].6); // index fixed below
         }
-        let mut live: Vec<(u32, u8, f32, Board)> = Vec::with_capacity(scored.len());
-        for (j, (pi, m, s, _reached, _over, c, _)) in scored.into_iter().enumerate() {
+        let mut live: Vec<(u32, u8, f32, u16, Board)> = Vec::with_capacity(scored.len());
+        for (j, (pi, m, s, reached, _over, c, _)) in scored.into_iter().enumerate() {
             if Some(j) == forced {
-                live.push((pi, m, f32::INFINITY, c));
+                live.push((pi, m, f32::INFINITY, reached, c));
             } else if !c.is_over() {
-                live.push((pi, m, s, c));
+                live.push((pi, m, s, reached, c));
             }
         }
         if live.is_empty() {
@@ -220,8 +226,18 @@ fn main() {
             let idx = live.iter().position(|c| c.2 == f32::INFINITY).expect("forced child kept");
             best.2 = idx as u32;
         }
-        history.push(live.iter().map(|&(pi, m, _, _)| (pi, m)).collect());
-        frontier = live.into_iter().map(|(_, _, _, b)| Node { board: b }).collect();
+        if let Some(w) = tree.as_mut() {
+            use std::io::Write;
+            let depth = start.moves as usize + level + 1;
+            let mut line = format!("{}", level + 1);
+            for &(pi, m, s, reached, _) in &live {
+                line.push_str(&format!(" {pi},{m},{:.1},{}", s, reached as i64 - depth as i64));
+            }
+            line.push('\n');
+            w.write_all(line.as_bytes()).unwrap();
+        }
+        history.push(live.iter().map(|&(pi, m, _, _, _)| (pi, m)).collect());
+        frontier = live.into_iter().map(|(_, _, _, _, b)| Node { board: b }).collect();
 
         if !quiet && (level + 1) % 50 == 0 {
             let top = frontier.len();

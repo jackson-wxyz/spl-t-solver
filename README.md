@@ -11,8 +11,10 @@ ideally, beat the world record.
 | Repo owner's personal best (by hand) | 477 |
 | First beam search with hand-built evaluation (session 1) | 522 (`runs/best/scratch_522.txt`) |
 | Josh Holder's best computed + hand-tuned sequence (2022) | 1208 |
-| World record: Jonathon Becker (@mangosquash), late 2022, by hand | 1277 |
-| **Rollout beam, from scratch** (`rbeam`, width 100, k 4, cap 200, seed 3, ~40 s on the desktop) | **1885** (`runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt`) |
+| 2022 world record: Jonathon Becker (@mangosquash), by hand | 1277 |
+| Best score posted publicly: ryederek on Bluesky, March 2026 (Legacy Collection) | 1910 |
+| Rollout beam, from scratch (`rbeam`, width 100, k 4, cap 200, seed 3, ~40 s on the desktop) | 1885 (`runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt`) |
+| **Rollout beam, from scratch, two stochastic rollouts per child** (width 100, k 4, cap 200, `--stoch 2`, seed 1, ~100 s) | **2064** (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`) |
 | Rollout beam resuming Josh Holder's 1208 game at move 700 | 1984 (`runs/best/from_josh1208_at700_1984_rbeam_w100_k4_r300.txt`) |
 
 The engine replays all four published record games move for move, and every sequence in
@@ -36,6 +38,9 @@ human replay tool listed under "Next steps".
   1800 and the theoretical one about 3700.
 - **Jonathon Becker (@mangosquash)** then took the record to 1258 and 1277 (2022). According to
   the Dec 2025 Bluesky thread he did it without computer help.
+- **ryederek** (Bluesky), who made the record-history plot, posted 1396 splits on
+  2026-03-10 and **1910 on 2026-03-20** on the Legacy Collection. Whether with computer
+  help is not stated.
 
 ## How the rules were pinned down
 

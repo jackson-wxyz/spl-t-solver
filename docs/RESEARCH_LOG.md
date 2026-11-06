@@ -17,9 +17,12 @@ worked, what didn't, and what I'd do next. Read [README.md](../README.md) and
 - **Session 1's search was not the answer; session 2's is.** Beam search with hand-built
   evaluations reached 522 from scratch. Session 2 (below, "Session 2") replaced the
   evaluation with *rollouts of Josh Holder's ported heuristic*: **1885 from scratch** at
-  beam width 100 in under a minute, and 1984 resuming his 1208 game at move 700. The world
-  record is **1277** (Jonathon Becker / @mangosquash, by hand, 2022). Nothing has been played
-  on the real game yet.
+  beam width 100 in under a minute, and 1984 resuming his 1208 game at move 700. The best
+  score posted publicly is **1910** (ryederek on Bluesky, 2026-03-20, on the Legacy
+  Collection; whether by hand or with a computer is not stated), after 1396 on 2026-03-10;
+  before that the record was 1277 (Jonathon Becker / @mangosquash, by hand, 2022). Nothing
+  from this solver has been played on the real game yet; `tools/replay.html` exists for
+  that.
 - **The bottleneck was the evaluation function, not compute.** Session 1 proved it (beam
   widths 50-4000 from move 900 of the 1208 game all died at 1035-1077); session 2 fixed it.
 
@@ -262,6 +265,12 @@ The rollout-beam games depart from the greedy choice at about a third of their m
 
   Cap 200 is the setting to use; the seed-to-seed spread (1440 to 1885) means many seeds
   should be run and the best kept. `--policy both` buys nothing for twice the cost.
+
+  Width 300 at cap 200, thirteen seeds: 1692 / 1586 / **2039** / 1474 / 1648 / 1627 /
+  1710 / 1207 / 1747 / 1022 / 1170 / 1269 / 1332 (mean 1502, about 100 s each). So a wider
+  beam does not lift the typical game; the best game is set by the tail of the
+  distribution, and the cheapest way to a better best is more seeds. Width 1000 runs are
+  in `runs/exp/rbeam_long2.log` if they finished after this was written.
 - **Why greedy rollouts die**: from strong positions (moves 600 / 1000 / 1400 of the 1780
   game) greedy adds 255 / 154 / 183 moves and the dead board always shows "twins": adjacent
   clusters in one pipe with nearly equal values (853 / 845 / 847, or 368 / 368 / 358 / 351 /
@@ -282,6 +291,90 @@ The rollout-beam games depart from the greedy choice at about a third of their m
 - **Two extra stochastic rollouts per child** (`--stoch 2 --temp 3`, keep the longest of
   three): 2064 / 1215 / 1511 over three seeds at cap 200, three times the cost. Not
   consistently better than one greedy rollout, but it produced the best game.
+- **Static penalties on the slow-poison features are harmful too**: `--wstuck 0.5` gave
+  1436 / 1033 / 859, `--wstuck 2` 1126 / 1055 / 906, `--wdebt 0.1` 1273 / 783 / 646.
+  Every static term added to the rollout length has made the beam worse. The rollout
+  length is a better judge of a position than any feature computed from it, and the right
+  fix for its blind spots is probably a better rollout policy, not a correction term.
+
+### The game, in numbers (`stats` export of the 2064 game)
+
+`src/bin/stats.rs` prints per-move statistics (cluster values per pipe, free cells,
+legal moves, greedy rollout length, the rollout lengths of the top-4 alternatives and the
+rank the game took) and `--json` writes them for the visualization. Per 100-move window of
+the 2064 game:
+
+| moves | clusters / pipe | free cells | legal moves | greedy rollout | took rank 1 | median ratio of adjacent clusters |
+|---|---|---|---|---|---|---|
+| 0-100 | 1.6 | 91 | 8.9 | 324 | 43% | - |
+| 100-300 | 3.2-4.0 | 48-58 | 9-11 | 290-300 | 63% | 1.0 |
+| 300-600 | 4.6-5.8 | 34-40 | 7-8 | 250-260 | 58-63% | 1.2-2.1 |
+| 600-900 | 5.8-6.6 | 18-33 | 4-7 | 210-260 | 48-64% | 1.1-2.1 |
+| 900-1800 | 6.3-6.8 | 16-28 | 3.4-5 | 190-245 | 53-68% | 2.1 |
+| 1800-2064 | 6.8-6.9 | 15-18 | 3.4-4.2 | 150 → 32 | 66-81% | 2.1 |
+
+Every pipe holds two clusters by move 82, three by 176, five by 346 and seven by 621. One
+cluster is created every 3.17 moves; 626 of the 651 clusters are 2×2 groups of 1×1 blocks
+(12 are 1×2, 9 are 2×1, 2 are 2×2, 2 are 8-block groups). 354 cluster-creating moves are
+vertical splits and 297 horizontal. The game's move is the heuristic's first choice 1256
+times, second 452, third 229, fourth 127; at 321 moves the move taken was not even the
+longest-rollout alternative, so the beam's look-ahead beyond one ply matters.
+
+Exact capacity accounting from the engine (`MoveInfo.refill_cap`, `new_point_cap`):
+2064 = 127 + 2094 (capacity of refill blocks) − 156 (capacity lost when non-1×1 blocks
+became point blocks) − 1 left over. With one 2×2 refill per cluster the refill term would
+be 3 × 651 = 1953; the extra 141 came from bigger refills (a 2×4 when two stacked clusters
+explode on the same move, a 4×2 when neighbouring pipes fire together). Josh Holder's 1208
+game: 1208 = 127 + 1323 − 242.
+
+### Upper bounds (how long can a game possibly be?)
+
+**Capacity is exactly conserved per cycle.** Define K = Σ over free blocks of (area − 1).
+Every split costs exactly 1 of K. When four blocks of area a become point blocks, K
+drops by 4(a − 1). An explosion freeing cells and a refill block of area R adds R − 1. So
+moves = 127 + Σ(R − 1) − Σ 4(a − 1) − K_final, exactly (verified above). A 2×2 refill
+turned into a 2×2 cluster of 1×1 blocks: +3, −3 splits, −0 lost: the cycle is neutral and
+every explosion funds exactly 3 moves. A bigger refill covering c clusters' worth of cells
+funds 4c − 1 moves, i.e. under 4 per cluster. **So the game needs one cluster explosion
+every 3 moves (at most every 4 with the biggest conceivable refills), forever.**
+
+**Halvings are capped at 7.** A cluster's two blocks in a column are stacked and explode
+together, so each explosion beneath a block removes at least two rows; sixteen rows
+minus the block's own two leave room for seven explosions beneath it. Pipes are at least
+two columns wide (a cluster is a 2×2 arrangement), so there are at most four of them.
+
+**The chain.** A cluster enters a pipe worth the move number n, counts down 1 per move
+and is halved (floor) at each explosion beneath it. With a pipe of depth 8 (7 halvings)
+firing every I moves, the value reaching the bottom is about n/128 − I, and in steady
+state that must equal I, so I ≈ n/256. A single-pipe simulation (clusters created three
+moves after each explosion, bunched explosions queued) gives **I ≈ n/265 for depth 8,
+stable to ±1, and n/133 for depth 7**. Four pipes must deliver one explosion per 3 moves,
+so I ≤ 12 with plain 2×2 refills, ≤ 12.9 with the refill mix the 2064 game achieved (3.22
+moves per cluster), ≤ 15 with every refill an 8×2 (3.75 per cluster), and ≤ 16 is the
+absolute limit. The clockwork therefore stops keeping up at about **n = 3,200 (plain) /
+3,400 (observed refill mix) / 4,000 (perfect 8×2 refills) / 4,250 (absolute)**.
+
+**The tail.** Past that point the interval I = n/265 keeps growing and the deficit per move
+is 1 − n0/n, which integrates to (n − n0) − n0·ln(n/n0). With K0 ≈ 25 moves of slack on the
+board that is exhausted at n ≈ n0 (1 + √(2K0/n0)), about 12% past n0: roughly **3,550 /
+3,800 / 4,500 / 4,750**. So the best hard-ish upper bound I can defend is about **4,700
+splits**, and the ceiling for a perfectly timed four-pipe clockwork with realistic refills
+is about **3,800**.
+
+**What I think the true maximum is: about 3,000, likely between 2,700 and 3,400.** The
+reasons it is below the 3,800 clockwork ceiling: (1) depth 8 means a pipe is entirely
+point blocks between its refill and its next explosion, so the four pipes must be
+staggered within a move or two of perfectly, with integer floors in every halving; any
+slack the player keeps for timing errors is a cluster not in a pipe, and a depth-7 pipe
+tops out around 1,700; (2) the opening spends the first 600 moves building depth, and the
+clusters created then enter small pipes; (3) direction alternation forces the four pipes
+into interleaved VHH / HVV patterns, which fights the staggering; (4) the 2064 game
+already runs mostly depth-8 pipes with a median adjacent ratio of 2.1 and dies when the
+margin collapses, so the remaining gain must come from near-perfect staggering, and the
+rollout beam has no model of that. The reasons it is above 2,064: thirteen width-300
+seeds landed between 1,022 and 2,039, so the search is nowhere near the structure's
+limit; and the clockwork at n = 2,064 still has slack (depth 8 needs I = 7.8, the pipes
+can afford 12.9).
 - The "avoid big clusters" rollout policy (take the best move that does not create point
   blocks bigger than 1×1) differs from greedy at 18 of 534 moves of the greedy game and
   scores 435 from scratch, so it is not simply better; `--policy both` takes the longer of
@@ -335,6 +428,19 @@ fiddly; his `doesPointBlockCauseNewHalving()` in `weighting_new.py` works it out
 - Weights were hand-tuned from single noisy runs. A one-parameter change sends the game
   down an entirely different path, so a single run says little; use the prefix benchmark
   instead.
+
+## Tools added in session 2
+
+- `src/bin/stats.rs` (per-move statistics, `--rollout`, `--alts`, `--json`), used by the
+  "SPL-T Clockwork" visualization (an HTML page built from `runs/best/scratch_2064_stats.json`,
+  the run list in `runs/exp`, and a `rbeam --tree` dump of a width-30 run).
+- `rbeam --tree FILE` dumps the beam genealogy (parent index and rollout length of every
+  kept node per level).
+- `src/bin/export_game.rs` + `tools/replay.html` (built in a parallel session): per-move
+  boards as JSON and a page that highlights the block to tap, for replaying a sequence on
+  the real game.
+- `docs/OUTREACH.md` (git-ignored, holds contact details) lists people who might want to
+  hear about this.
 
 ## Suggested next steps (roughly in order of expected value)
 
