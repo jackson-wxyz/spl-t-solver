@@ -94,6 +94,9 @@ Of the approaches considered, existing open-source code turned out to be the rig
 - `sweeps/` - config lists for `sweep`.
 - `runs/best/` - best sequences found. A sequence is a list of block indices in the
   engine's block order. It's not yet human-friendly; see "Next steps".
+- `tools/replay.html` - single-file page for replaying a sequence by hand on the real game:
+  shows each board with the block to tap highlighted. It loads the per-move JSON written by
+  `src/bin/export_game.rs`.
 
 ## Running
 
@@ -122,6 +125,19 @@ at width 100 / k 4 / cap 200), so run several. On the Ryzen 5 7600 a width-100 r
 Speed on the laptop (i7-8565U, 4 cores): width 200 from scratch takes ~2-3 s, width 800 ~12 s.
 Most of the time goes into evaluating positions; see "Performance" in
 [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
+
+## Replaying a sequence by hand
+
+```
+cargo run --release --bin export_game -- runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt runs/best/scratch_2064.json
+```
+
+Open `tools/replay.html` in a browser and load the JSON with "Open file" or by dropping it on
+the page. Tap the highlighted block in the game, then press "I made this move" (or Space / Right
+arrow; Left arrow goes back). The "Score" box jumps to the position where the game shows that
+score, and the page remembers each file's position in the browser. Served over http, it also
+takes `?src=`: run `python -m http.server` in the project folder and open
+`http://localhost:8000/tools/replay.html?src=../runs/best/scratch_2064.json`.
 
 ## What I learned about the search
 
