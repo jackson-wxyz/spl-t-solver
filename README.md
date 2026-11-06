@@ -48,14 +48,25 @@ Of the approaches considered, existing open-source code turned out to be the rig
 
 ## Layout
 
-- `src/engine.rs` - fast game engine (~1.3M moves/s single-threaded on the laptop). The
-  block order matches the reference emulator, so its move-index sequences replay directly.
+- `src/engine.rs` - fast game engine (~1M moves/s single-threaded on the laptop, late-game
+  positions). The block order matches the reference emulator, so its move-index sequences
+  replay directly.
 - `src/search.rs` - position evaluation and parallel beam search (rayon).
 - `src/bin/solve.rs` - the solver. `src/bin/replay.rs` replays and verifies a sequence.
   `src/bin/trace.rs` prints evaluation features along a game. `src/bin/bench.rs`
   measures speed and a random-play baseline.
+- `src/bin/sweep.rs` - compares evaluation configs (one per line of a file, see
+  `sweeps/example.txt`) on a fixed benchmark: a fresh game plus resuming the 1208 record
+  game at moves 500/700/900. All jobs run in parallel.
+- `src/bin/prof.rs` - per-operation timing on real positions. Build with `--features prof`
+  for a per-phase breakdown of move resolution.
+- `src/bin/selfcheck.rs` - equivalence check. It prints engine-state and evaluation digests
+  for thousands of positions. Diff its output between a normal build and a
+  `--features reference` build (simple whole-board versions of the optimized steps); they
+  must be identical.
 - `reference/` (git-ignored) - clone of josh-holder/SPLT, needed for the record sequences:
   `git clone https://github.com/josh-holder/SPLT reference/josh-holder-SPLT`
+- `sweeps/` - config lists for `sweep`.
 - `runs/best/` - best sequences found. A sequence is a list of block indices in the
   engine's block order. It's not yet human-friendly; see "Next steps".
 
@@ -68,10 +79,16 @@ cargo build --release
 cargo run --release --bin solve -- --width 800
 cargo run --release --bin replay -- runs/best/scratch_522.txt --final
 cargo run --release --bin solve -- --width 400 --prefix reference/josh-holder-SPLT/sequences/1208seq.txt --keep 1100
+cargo run --release --bin sweep -- sweeps/example.txt --width 200
 ```
 
 `solve` flags: `--width` (beam width), and evaluation weights `--ws --wd --tau --wc --wi --wdebt
---wslot --wmodel --mh --wback --wstuck --stuckt --alt`. See `Params` in `src/search.rs`.
+--wslot --wmodel --mh --wback --wstuck --stuckt --alt`. See `Params::from_args` in
+`src/search.rs`. The search is deterministic: the same flags always give the same game.
+
+Speed on the laptop (i7-8565U, 4 cores): width 200 from scratch takes ~2-3 s, width 800 ~12 s.
+Most of the time goes into evaluating positions; see "Performance" in
+[docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
 
 ## What I learned about the search (2026-11-06)
 

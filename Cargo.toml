@@ -3,6 +3,10 @@ name = "splt"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+prof = []
+reference = []
+
 [dependencies]
 rayon = "1.12.0"
 

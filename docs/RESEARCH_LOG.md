@@ -124,6 +124,61 @@ Beam width W. Unless noted, the evaluation is `survive + 0.5·disc + 0.3·cap �
 Note: `1196seq` and `1208seq` share the first 900+ moves, so a prefix benchmark over both
 only has 3 distinct positions.
 
+## Performance (second pass, same day)
+
+Profiling (`prof`) showed about **95% of search time is evaluation**, and almost all of that
+is the no-splits fast-forward (`passive_step`): about 20 explosion events per evaluation, at
+3-4.5 µs each in the late game. A real move costs about 1 µs. Inside an event, every phase
+walked the whole block list (100+ blocks late in the game, since each 1×1 cluster is four
+blocks): gravity 40%, removing exploded blocks + redrawing the grid 34%, post-fall cluster
+scan 14%, countdown 8%.
+
+Exact optimizations made (no change to any result):
+
+| Change | Why it's exact |
+|---|---|
+| **Gravity: one bottom-up pass over "active" columns only** (columns with an explosion or a hanging split half, plus columns of anything that falls) instead of repeated passes over every block | The settled state is unique: blocks never pass each other, and a block's resting place depends only on the final positions of the blocks beneath it. The board is settled before each move, so support can only disappear in active columns |
+| **Grid remap instead of full redraw** after removing exploded blocks | Same grid contents; just renumbered |
+| **Post-fall cluster scan only around blocks that moved or were just refilled** | A new 2×2 group must contain a block whose position changed. A `dirty_groups` flag falls back to the full scan in the one corner case where an unclustered group can survive (refill with no fall, where the reference doesn't scan) |
+| **Cached next-explosion time; capacity and point area updated incrementally** from `MoveInfo` instead of re-summing all blocks per event | Arithmetic identity; checked by `debug_assert`s and by `check_invariants` after every replayed move |
+| **Beam: hash and deduplicate children *before* evaluating them**, then evaluate the distinct positions as one flat parallel list | Equal positions have equal evaluations. The sort/dedup/select steps see the same keys in the same order, so they pick the same nodes |
+
+How it was verified:
+
+- `selfcheck` digests over 3000 random games plus every child of every position of the
+  1133, 1208 and 522 games (about 10 MB of hashes and exact feature bits) are byte-identical
+  across three builds: the optimized engine, the `--features reference` build, and the
+  previous commit's engine.
+- All record replays still pass, with stronger invariants (cache consistency, and no
+  unclustered group while the flag is clear).
+- `solve --width 200/800` produce byte-identical sequences to before (412 and 522).
+
+Result on the laptop: **width 200 went from 13.2 s to ~2-3 s, and width 800 from 60 s to
+~12 s** (about 5×). A fast-forward event costs ~1.5 µs now. Duplicate children are only
+~12%. Most of the beam-loop gain came from load balancing: before, each rayon task
+evaluated all ~30 children of one parent in sequence, and now evaluation is a flat parallel
+list.
+
+**Threads.** 1 / 2 / 4 / 8 threads take 6.9 / 4.3 / 2.8 / 2.8 s at width 200. The laptop has
+4 physical cores and a 15 W power limit, so all-core clocks drop well below the single-core
+boost. That's a hardware plateau, not a serial bottleneck: per-level serial work is trivial.
+The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
+`sweep` runs every (config, start) job in parallel, which keeps all cores busy.
+
+**What's left, if speed matters again:**
+
+- The remaining per-event cost is spread out: gravity ~40% (the inherent work of moving
+  ~28 blocks when a stack drops), remove+remap ~22%, cluster scan ~18%, countdown ~12%.
+- Struct-of-arrays point values plus SIMD countdown/explode detection might give
+  another ~1.3×.
+- *Sharing* fast-forward work between siblings doesn't pay off. Splits happen at the top of
+  pipes, which are exactly the blocks that fall and get refilled within the look-ahead.
+- Shortening the look-ahead horizon would help a lot but changes the evaluation, so treat it
+  as a tuning parameter, not a free speedup.
+- **GPUs** suit a learned evaluation (batched network inference over the beam's thousands of
+  children) far better than the engine itself. The engine is branchy, with irregular
+  per-board loops.
+
 ## What I believe about the game (theory)
 
 **The pipeline picture.** The record games settle into four 2-column pipes. Each is a stack

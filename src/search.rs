@@ -69,6 +69,36 @@ impl Default for Params {
     }
 }
 
+/// Value of `--name <value>` in an argument list, if present and parseable.
+pub fn arg<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok())
+}
+
+impl Params {
+    /// Evaluation parameters from command-line style flags (unspecified ones keep defaults):
+    /// --horizon --ws --wd --tau --wc --wi --wdebt --wslot --wmodel --mh --wback --wstuck
+    /// --stuckt, and the switch --alt.
+    pub fn from_args(args: &[String]) -> Params {
+        let d = Params::default();
+        Params {
+            horizon: arg(args, "--horizon").unwrap_or(d.horizon),
+            w_survive: arg(args, "--ws").unwrap_or(d.w_survive),
+            w_disc: arg(args, "--wd").unwrap_or(d.w_disc),
+            tau: arg(args, "--tau").unwrap_or(d.tau),
+            w_cap: arg(args, "--wc").unwrap_or(d.w_cap),
+            w_imb: arg(args, "--wi").unwrap_or(d.w_imb),
+            w_debt: arg(args, "--wdebt").unwrap_or(d.w_debt),
+            w_slot: arg(args, "--wslot").unwrap_or(d.w_slot),
+            w_model: arg(args, "--wmodel").unwrap_or(d.w_model),
+            model_horizon: arg(args, "--mh").unwrap_or(d.model_horizon),
+            w_backlog: arg(args, "--wback").unwrap_or(d.w_backlog),
+            alt: args.iter().any(|a| a == "--alt"),
+            w_stuck: arg(args, "--wstuck").unwrap_or(d.w_stuck),
+            stuck_t: arg(args, "--stuckt").unwrap_or(d.stuck_t),
+        }
+    }
+}
+
 /// Time for a point block of value `v` to clear if it is halved at each of `events`
 /// (sorted times at which something beneath it explodes), counting down 1 per move.
 #[inline]
@@ -254,7 +284,8 @@ pub fn pipeline_model(n: u32, free_area: [u32; 4], free_cap: [f32; 4], passive: 
 pub fn features(b: &Board, p: &Params) -> Features {
     let mut pipe_events: [[u16; 32]; 4] = [[0; 32]; 4];
     let mut pipe_n = [0usize; 4];
-    let mut passive: Vec<(u16, [u8; 4])> = Vec::with_capacity(48);
+    let mut passive = [(0u16, [0u8; 4]); 128];
+    let mut n_passive = 0usize;
     let (k0, hs, vs) = capacity(b);
     // Direction-aware usable capacity of the current free blocks.
     let alt = if p.alt { alt_capacity(b, k0.max(0) as u32) as i32 } else { k0 };
@@ -285,15 +316,21 @@ pub fn features(b: &Board, p: &Params) -> Features {
             }
         }
         let ca = info.exploded_col_area;
-        passive.push((elapsed, [ca[0] + ca[1], ca[2] + ca[3], ca[4] + ca[5], ca[6] + ca[7]]));
-        pa = point_area(&t);
+        if n_passive < passive.len() {
+            passive[n_passive] = (elapsed, [ca[0] + ca[1], ca[2] + ca[3], ca[4] + ca[5], ca[6] + ca[7]]);
+            n_passive += 1;
+        }
+        // Incremental bookkeeping (exact): explosions remove point area, post-fall clusters
+        // add point area and remove capacity, refill blocks add capacity.
+        pa = pa + info.new_point_area - info.exploded_area;
+        debug_assert_eq!(pa, point_area(&t));
         // Moves up to `elapsed` can only use capacity `cur`.
         if survive.is_none() && cur < elapsed as i32 {
             survive = Some(cur);
         }
-        let (k, _, _) = capacity(&t);
-        let gain = k - kprev;
-        kprev = k;
+        let gain = info.refill_cap as i32 - info.new_point_cap as i32;
+        kprev += gain;
+        debug_assert_eq!(kprev, capacity(&t).0);
         cur += gain;
         disc += gain as f32 * (-(elapsed as f32) / p.tau).exp();
     }
@@ -316,7 +353,7 @@ pub fn features(b: &Board, p: &Params) -> Features {
     let scale = if free_total > 0 { alt as f32 / free_total as f32 } else { 0.0 };
     let free_cap = free_area.map(|a| a as f32 * scale);
     let (death, backlog) = if p.w_model != 0.0 {
-        pipeline_model(b.moves as u32, free_area, free_cap, &passive, p.model_horizon as u32)
+        pipeline_model(b.moves as u32, free_area, free_cap, &passive[..n_passive], p.model_horizon as u32)
     } else {
         (0.0, 0.0)
     };
@@ -339,6 +376,15 @@ pub struct SearchResult {
     /// Full move sequence (block indices, replayable with `replay`).
     pub moves: Vec<u8>,
     pub splits: u16,
+    pub stats: SearchStats,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SearchStats {
+    /// Children generated (all legal moves of all beam nodes).
+    pub children: u64,
+    /// Distinct non-terminal children evaluated.
+    pub evaluated: u64,
 }
 
 /// Beam search from `start` (which must be the position after `prefix`).
@@ -353,10 +399,12 @@ pub fn beam_search(start: &Board, prefix: &[u8], width: usize, p: &Params, verbo
     let mut frontier = vec![Node { board: start.clone(), score: 0.0 }];
     // Best finished game: (splits, level of parent, parent index, final move).
     let mut best: Option<(u16, usize, u32, u8)> = None;
+    let mut stats = SearchStats::default();
 
     loop {
         let level = history.len();
-        let children: Vec<(u32, u8, f32, u64, u16, bool)> = frontier
+        // Phase 1 (cheap): play every child, hash it, and note finished games.
+        let children: Vec<(u32, u8, u64, u16, bool)> = frontier
             .par_iter()
             .enumerate()
             .flat_map_iter(|(pi, node)| {
@@ -365,40 +413,51 @@ pub fn beam_search(start: &Board, prefix: &[u8], width: usize, p: &Params, verbo
                 mv.into_iter().map(move |m| {
                     let mut c = node.board.clone();
                     c.play(m as usize);
-                    let term = c.is_over();
-                    let s = if term { f32::NEG_INFINITY } else { evaluate(&c, p) };
-                    (pi as u32, m, s, c.hash64(), c.moves, term)
+                    (pi as u32, m, c.hash64(), c.moves, c.is_over())
                 })
             })
             .collect();
+        stats.children += children.len() as u64;
 
-        for &(pi, m, _, _, splits, term) in &children {
+        for &(pi, m, _, splits, term) in &children {
             if term && best.is_none_or(|b| splits > b.0) {
                 best = Some((splits, level, pi, m));
             }
         }
 
-        let mut live: Vec<(u32, u8, f32, u64)> =
-            children.into_iter().filter(|c| !c.5).map(|(pi, m, s, h, _, _)| (pi, m, s, h)).collect();
+        let mut live: Vec<(u32, u8, u64)> =
+            children.into_iter().filter(|c| !c.4).map(|(pi, m, h, _, _)| (pi, m, h)).collect();
         if live.is_empty() {
             break;
         }
-        // Dedup identical positions reached by different move orders.
-        live.par_sort_unstable_by_key(|c| c.3);
-        live.dedup_by_key(|c| c.3);
+        // Dedup identical positions reached by different move orders *before* the expensive
+        // evaluation (equal positions have equal evaluations, so the result is unchanged).
+        live.par_sort_unstable_by_key(|c| c.2);
+        live.dedup_by_key(|c| c.2);
+        stats.evaluated += live.len() as u64;
+
+        // Phase 2 (expensive): evaluate each distinct position once.
+        let mut live: Vec<(u32, u8, f32)> = live
+            .par_iter()
+            .map(|&(pi, m, _)| {
+                let mut c = frontier[pi as usize].board.clone();
+                c.play(m as usize);
+                (pi, m, evaluate(&c, p))
+            })
+            .collect();
         if live.len() > width {
             live.select_nth_unstable_by(width - 1, |a, b| b.2.total_cmp(&a.2));
             live.truncate(width);
         }
         let next: Vec<Node> = live
             .par_iter()
-            .map(|&(pi, m, s, _)| {
+            .map(|&(pi, m, s)| {
                 let mut c = frontier[pi as usize].board.clone();
                 c.play(m as usize);
                 Node { board: c, score: s }
             })
             .collect();
-        history.push(live.iter().map(|&(pi, m, _, _)| (pi, m)).collect());
+        history.push(live.iter().map(|&(pi, m, _)| (pi, m)).collect());
         frontier = next;
 
         if verbose && (level + 1) % 25 == 0 {
@@ -432,5 +491,5 @@ pub fn beam_search(start: &Board, prefix: &[u8], width: usize, p: &Params, verbo
     }
     let mut moves = prefix.to_vec();
     moves.extend(rev.into_iter().rev());
-    SearchResult { moves, splits }
+    SearchResult { moves, splits, stats }
 }

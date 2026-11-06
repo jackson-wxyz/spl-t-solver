@@ -1,0 +1,5 @@
+# baseline (current defaults)
+--wslot 0.2
+--wmodel 1
+--wmodel 0.3
+--wslot 0.2 --alt

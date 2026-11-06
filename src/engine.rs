@@ -16,6 +16,10 @@ pub const H: usize = 16;
 pub const CELLS: usize = W * H;
 pub const MAXB: usize = CELLS;
 pub const EMPTY: u8 = 255;
+/// Build with `--features reference` to use straightforward whole-board versions of the
+/// optimized steps (multi-pass gravity in list order, full grid repaint, full-board cluster
+/// scan after falls). Results must be identical; `selfcheck` output is diffed between modes.
+const REFERENCE: bool = cfg!(feature = "reference");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Block {
@@ -51,6 +55,10 @@ pub struct MoveInfo {
     pub exploded_cols: u8,
     /// Exploded cell area per column.
     pub exploded_col_area: [u8; W],
+    /// Splitting capacity, sum(area - 1), of blocks that became point blocks.
+    pub new_point_cap: u32,
+    /// Splitting capacity of blocks added by the top refill.
+    pub refill_cap: u32,
 }
 
 #[derive(Clone)]
@@ -61,6 +69,13 @@ pub struct Board {
     pub len: u8,
     /// Number of splits made so far (= the score shown in the game).
     pub moves: u16,
+    /// Smallest countdown among point blocks, 0 if there are none (maintained by `resolve`).
+    next_expl: u16,
+    /// Set when a refill added blocks without anything falling. The reference only scans the
+    /// whole board for clusters after a fall, so an unclustered 2x2 group may then exist until
+    /// the next fall. While this is clear, a fall can only create groups that contain a block
+    /// that moved or was just added, so the post-fall scan can be restricted to those.
+    dirty_groups: bool,
 }
 
 impl Default for Board {
@@ -71,7 +86,7 @@ impl Default for Board {
 
 impl Board {
     pub fn new() -> Self {
-        let mut b = Board { blocks: [Block::default(); MAXB], grid: [0; CELLS], len: 1, moves: 0 };
+        let mut b = Board { blocks: [Block::default(); MAXB], grid: [0; CELLS], len: 1, moves: 0, next_expl: 0, dirty_groups: false };
         b.blocks[0] = Block { x: 0, y: 0, w: W as u8, h: H as u8, pts: 0 };
         b
     }
@@ -222,6 +237,7 @@ impl Board {
         let maybe_fall = !horiz
             && bottom < H
             && (b.x as usize..(b.x + b.w) as usize).any(|x| self.grid[bottom * W + x] == EMPTY);
+        let fall_cols = if maybe_fall { col_mask(&b) } else { 0 };
 
         // ---- 1. Split ------------------------------------------------------------------
         self.do_split(i, horiz);
@@ -238,119 +254,240 @@ impl Board {
             self.blocks[j].pts = n + 1; // counted down to n in step 3
             info.new_point_blocks += 1;
             info.new_point_area += self.blocks[j].area();
+            info.new_point_cap += self.blocks[j].area() - 1;
         }
 
-        self.resolve(n, 1, maybe_fall, &mut info);
+        self.resolve(n, 1, fall_cols, &mut info);
         Some(info)
     }
 
     /// Steps 3-8 of a move: count every point block down by `dec` (exploding the ones that
     /// run out), apply gravity, refill from the top, form clusters created by falling, and
     /// halve point blocks that fell. `n` is the split count used to value new clusters.
-    fn resolve(&mut self, n: u16, dec: u16, maybe_fall: bool, info: &mut MoveInfo) {
+    /// `fall_cols`: columns where a split may have left a half unsupported.
+    fn resolve(&mut self, n: u16, dec: u16, fall_cols: u8, info: &mut MoveInfo) {
         // ---- 3. Count down every point block ---------------------------------------------
+        let t0 = phase::tick();
         let mut exploded: u128 = 0;
+        let mut min_left = u16::MAX;
         for j in 0..self.len as usize {
             let p = self.blocks[j].pts;
             if p > dec {
-                self.blocks[j].pts = p - dec;
+                let q = p - dec;
+                self.blocks[j].pts = q;
+                min_left = min_left.min(q);
             } else if p > 0 {
                 exploded |= 1u128 << j;
             }
         }
+        phase::add(0, t0);
 
         // ---- 4. Remove exploded blocks -------------------------------------------------
+        let t0 = phase::tick();
         let mut rows_destroyed: u32 = 0;
+        let mut active = fall_cols; // columns where something may now be unsupported
         if exploded != 0 {
+            let mut remap = [EMPTY; 256];
             let mut k = 0usize;
             for j in 0..self.len as usize {
                 let bj = self.blocks[j];
                 if exploded >> j & 1 == 1 {
                     info.exploded += 1;
                     info.exploded_area += bj.area();
-                    info.exploded_cols |= (((1u32 << bj.w) - 1) << bj.x) as u8;
+                    let cm = col_mask(&bj);
+                    info.exploded_cols |= cm;
+                    active |= cm;
                     for c in bj.x..bj.x + bj.w {
                         info.exploded_col_area[c as usize] += bj.h;
                     }
                     rows_destroyed |= ((1u32 << bj.h) - 1) << bj.y;
                 } else {
                     self.blocks[k] = bj;
+                    remap[j] = k as u8;
                     k += 1;
                 }
             }
             self.len = k as u8;
-            self.repaint();
-        }
-
-        // ---- 5. Gravity: repeat until nothing moves --------------------------------------
-        let mut fell: u128 = 0;
-        let mut falling = false;
-        if exploded != 0 || maybe_fall {
-            loop {
-                let mut moved = false;
-                for j in 0..self.len as usize {
-                    let bj = self.blocks[j];
-                    let bottom = (bj.y + bj.h) as usize;
-                    if bottom == H {
-                        continue;
-                    }
-                    let mut dist = usize::MAX;
-                    for cx in bj.x as usize..(bj.x + bj.w) as usize {
-                        let mut d = 0;
-                        while bottom + d < H && self.grid[(bottom + d) * W + cx] == EMPTY {
-                            d += 1;
-                        }
-                        dist = dist.min(d);
-                        if d == 0 {
-                            break;
-                        }
-                    }
-                    if dist > 0 {
-                        paint(&mut self.grid, &bj, EMPTY);
-                        self.blocks[j].y += dist as u8;
-                        let moved_b = self.blocks[j];
-                        paint(&mut self.grid, &moved_b, j as u8);
-                        if bj.pts > 0 {
-                            fell |= 1u128 << j;
-                        }
-                        falling = true;
-                        moved = true;
-                    }
-                }
-                if !moved {
-                    break;
+            if REFERENCE {
+                self.repaint();
+            } else {
+                for c in self.grid.iter_mut() {
+                    *c = remap[*c as usize];
                 }
             }
         }
+        phase::add(1, t0);
+
+        // ---- 5. Gravity --------------------------------------------------------------------
+        let t0 = phase::tick();
+        let (mut fell, moved, falling) = if active != 0 {
+            if REFERENCE { self.gravity_iterative() } else { self.gravity(active) }
+        } else {
+            (0, 0, false)
+        };
+        phase::add(2, t0);
 
         // ---- 6. Refill voids from the top (reference-emulator rules, quirks included) ----
+        let t0 = phase::tick();
+        let before_refill = self.len as usize;
         if self.grid[..W].contains(&EMPTY) {
             self.refill(falling, rows_destroyed);
+            for j in before_refill..self.len as usize {
+                info.refill_cap += self.blocks[j].area() - 1;
+            }
         }
+        phase::add(3, t0);
 
         // ---- 7. After a fall, look for clusters anywhere --------------------------------
         if falling {
+            let t0 = phase::tick();
             let mut mark: u128 = 0;
-            self.mark_all_groups(&mut mark);
+            if REFERENCE || self.dirty_groups {
+                self.mark_all_groups(&mut mark);
+            } else {
+                let mut cand = moved;
+                for j in before_refill..self.len as usize {
+                    cand |= 1u128 << j;
+                }
+                while cand != 0 {
+                    let j = cand.trailing_zeros() as usize;
+                    cand &= cand - 1;
+                    if self.blocks[j].pts == 0 {
+                        self.mark_groups_containing(j, &mut mark);
+                    }
+                }
+            }
+            self.dirty_groups = false;
             while mark != 0 {
                 let j = mark.trailing_zeros() as usize;
                 mark &= mark - 1;
                 self.blocks[j].pts = n;
+                min_left = min_left.min(n);
                 info.new_point_blocks += 1;
                 info.new_point_area += self.blocks[j].area();
+                info.new_point_cap += self.blocks[j].area() - 1;
             }
+            phase::add(4, t0);
 
             // ---- 8. Halve point blocks that fell (rounding down; 1 stays 1) -------------
+            let t0 = phase::tick();
             while fell != 0 {
                 let j = fell.trailing_zeros() as usize;
                 fell &= fell - 1;
                 let p = self.blocks[j].pts;
                 if p > 1 {
                     self.blocks[j].pts = p / 2;
+                    min_left = min_left.min(p / 2);
                 }
                 info.halved += 1;
             }
+            phase::add(5, t0);
+        } else if self.len as usize > before_refill {
+            self.dirty_groups = true;
         }
+        self.next_expl = if min_left == u16::MAX { 0 } else { min_left };
+    }
+
+    /// Let every unsupported block fall as far as it can. Returns (bitmask of point blocks
+    /// that fell, bitmask of all blocks that moved, whether anything fell).
+    ///
+    /// The reference emulator loops "for each block in list order, fall if possible" until a
+    /// pass moves nothing, which takes about one pass per level of stacking. The final state
+    /// is unique: a block's resting place depends only on the final positions of the blocks
+    /// beneath it, since blocks never pass each other. So handling blocks bottom-up reaches the
+    /// same state in one pass. Also, the board was settled before this move, so a block can only
+    /// lose its support in a column where something exploded, a split half may hang, or a
+    /// block has just fallen. So only those `active` columns are scanned (bottom row first),
+    /// and the set grows as blocks fall. `gravity_iterative` keeps the reference algorithm.
+    fn gravity(&mut self, mut active: u8) -> (u128, u128, bool) {
+        let mut done: u128 = 0;
+        let mut fell: u128 = 0;
+        let mut moved: u128 = 0;
+        for row in (0..H - 1).rev() {
+            let mut cols = active;
+            while cols != 0 {
+                let c = cols.trailing_zeros() as usize;
+                cols &= cols - 1;
+                let id = self.grid[row * W + c];
+                if id == EMPTY || done >> id & 1 == 1 {
+                    continue;
+                }
+                let j = id as usize;
+                let bj = self.blocks[j];
+                let bottom = (bj.y + bj.h) as usize;
+                if bottom != row + 1 {
+                    continue; // not this block's bottom row
+                }
+                done |= 1u128 << j;
+                let mut dist = usize::MAX;
+                for cx in bj.x as usize..(bj.x + bj.w) as usize {
+                    let mut d = 0;
+                    while bottom + d < H && self.grid[(bottom + d) * W + cx] == EMPTY {
+                        d += 1;
+                    }
+                    dist = dist.min(d);
+                    if d == 0 {
+                        break;
+                    }
+                }
+                if dist > 0 {
+                    paint(&mut self.grid, &bj, EMPTY);
+                    self.blocks[j].y += dist as u8;
+                    let moved_b = self.blocks[j];
+                    paint(&mut self.grid, &moved_b, j as u8);
+                    moved |= 1u128 << j;
+                    if bj.pts > 0 {
+                        fell |= 1u128 << j;
+                    }
+                    active |= col_mask(&bj);
+                }
+            }
+        }
+        (fell, moved, moved != 0)
+    }
+
+    /// The reference emulator's gravity: repeat passes in list order until nothing moves.
+    fn gravity_iterative(&mut self) -> (u128, u128, bool) {
+        let mut fell: u128 = 0;
+        let mut moved_mask: u128 = 0;
+        let mut falling = false;
+        loop {
+            let mut moved = false;
+            for j in 0..self.len as usize {
+                let bj = self.blocks[j];
+                let bottom = (bj.y + bj.h) as usize;
+                if bottom == H {
+                    continue;
+                }
+                let mut dist = usize::MAX;
+                for cx in bj.x as usize..(bj.x + bj.w) as usize {
+                    let mut d = 0;
+                    while bottom + d < H && self.grid[(bottom + d) * W + cx] == EMPTY {
+                        d += 1;
+                    }
+                    dist = dist.min(d);
+                    if d == 0 {
+                        break;
+                    }
+                }
+                if dist > 0 {
+                    paint(&mut self.grid, &bj, EMPTY);
+                    self.blocks[j].y += dist as u8;
+                    let moved_b = self.blocks[j];
+                    paint(&mut self.grid, &moved_b, j as u8);
+                    if bj.pts > 0 {
+                        fell |= 1u128 << j;
+                    }
+                    moved_mask |= 1u128 << j;
+                    falling = true;
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        (fell, moved_mask, falling)
     }
 
     fn refill(&mut self, falling: bool, rows_destroyed: u32) {
@@ -414,8 +551,9 @@ impl Board {
     }
 
     /// Smallest countdown among point blocks (= moves until the next explosion), if any.
+    #[inline]
     pub fn next_explosion(&self) -> Option<u16> {
-        self.blocks().iter().filter(|b| b.pts > 0).map(|b| b.pts).min()
+        if self.next_expl == 0 { None } else { Some(self.next_expl) }
     }
 
     /// Fast-forward as if `dt` = next_explosion() moves passed without any split creating
@@ -425,7 +563,7 @@ impl Board {
         let dt = self.next_explosion()?;
         let mut info = MoveInfo::default();
         let n = self.moves + elapsed + dt;
-        self.resolve(n, dt, false, &mut info);
+        self.resolve(n, dt, 0, &mut info);
         Some((dt, info))
     }
 
@@ -453,6 +591,17 @@ impl Board {
             let bottom = (b.y + b.h) as usize;
             if bottom < H && (b.x..b.x + b.w).all(|x| g[bottom * W + x as usize] == EMPTY) {
                 return Some(format!("block {i} is floating: {b:?}"));
+            }
+        }
+        let min = self.blocks().iter().filter(|b| b.pts > 0).map(|b| b.pts).min().unwrap_or(0);
+        if min != self.next_expl {
+            return Some(format!("cached next explosion {} != actual {min}", self.next_expl));
+        }
+        if !self.dirty_groups {
+            let mut mark = 0u128;
+            self.mark_all_groups(&mut mark);
+            if mark != 0 {
+                return Some("unclustered 2x2 group present while dirty_groups is clear".into());
             }
         }
         None
@@ -508,6 +657,32 @@ impl Board {
         }
         s
     }
+}
+
+/// Optional phase timing (build with `--features prof`); compiled out otherwise.
+pub mod phase {
+    #[cfg(feature = "prof")]
+    pub static TICKS: [std::sync::atomic::AtomicU64; 8] = [const { std::sync::atomic::AtomicU64::new(0) }; 8];
+    pub const NAMES: [&str; 8] = ["countdown", "remove+repaint", "gravity", "refill", "fall-clusters", "halve", "split+clusters", "other"];
+    #[inline(always)]
+    pub fn tick() -> u64 {
+        #[cfg(feature = "prof")]
+        unsafe {
+            return core::arch::x86_64::_rdtsc();
+        }
+        #[allow(unreachable_code)]
+        0
+    }
+    #[inline(always)]
+    pub fn add(_i: usize, _since: u64) {
+        #[cfg(feature = "prof")]
+        TICKS[_i].fetch_add(tick() - _since, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[inline]
+fn col_mask(b: &Block) -> u8 {
+    (((1u32 << b.w) - 1) << b.x) as u8
 }
 
 #[inline]
