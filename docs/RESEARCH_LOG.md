@@ -182,6 +182,28 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   children) far better than the engine itself. The engine is branchy, with irregular
   per-board loops.
 
+## Resume here (end of session 2, 2026-11-06 evening)
+
+- Best from scratch: **2064** (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`);
+  public best to beat is 1910 (ryederek, Bluesky, March 2026). Not yet replayed on the
+  real game: use `export_game` + `tools/replay.html`.
+- Recipe that works: `rbeam --width 100..300 --k 4 --rollout 200 --seed N` (optionally
+  `--stoch 2`), many seeds, keep the best. Every static penalty tried made it worse.
+- Unfinished: width-1000 runs were stopped before finishing (re-run
+  `rbeam --width 1000 --k 4 --rollout 200 --seed 1..4`, ~6 min each); endgame re-search
+  of the 2064 game (`--prefix runs/best/scratch_2064_... --keep 1900 --width 500`) not
+  tried yet.
+- Visualization page "SPL-T Clockwork": source in `tools/viz/` (publish `index.html` with
+  `data.js` beside it; `tools/analysis/build_data.py` rebuilds `data.js` from
+  `runs/best/scratch_2064_stats.json`, `runs/exp` file names and a `rbeam --tree` dump).
+  The upper-bound models are `tools/analysis/pipe2.py` (single pipe) and `clockwork.py`.
+- Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true,
+  TODO block at top, `[FINAL BEST]` placeholder). Outreach list: `docs/OUTREACH.md`
+  (git-ignored).
+- Most promising next research step: a rollout policy that keeps the four pipes
+  staggered (the clockwork analysis below says the structure can reach ~3,000+ but the
+  heuristic has no notion of phase), then endgame polishing.
+
 ## Session 2 (2026-11-06, desktop, Claude Fable 5.1): rollout beam, 1780 from scratch
 
 Hardware: Ryzen 5 7600 (6 cores / 12 threads), RTX 5070 Ti + RTX 3070 (unused so far).

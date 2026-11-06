@@ -1,0 +1,450 @@
+<title>SPL-T Clockwork</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; charts span it; chart surfaces sit a half-step above the page plane. */
+:root {
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --accent: #2a78d6; --accent-2: #eb6834; --gray: #898781;
+  --seq-lo: #cde2fb; --seq-hi: #0d366b;
+  --ord-1: #86b6ef; --ord-2: #3987e5; --ord-3: #1c5cab; --ord-4: #0d366b;
+  --wash: rgba(42,120,214,0.10);
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --accent: #3987e5; --accent-2: #d95926; --gray: #898781;
+    --seq-lo: #0d366b; --seq-hi: #cde2fb;
+    --ord-1: #184f95; --ord-2: #2a78d6; --ord-3: #6da7ec; --ord-4: #b7d3f6;
+    --wash: rgba(57,135,229,0.14);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --accent: #3987e5; --accent-2: #d95926; --gray: #898781;
+  --seq-lo: #0d366b; --seq-hi: #cde2fb;
+  --ord-1: #184f95; --ord-2: #2a78d6; --ord-3: #6da7ec; --ord-4: #b7d3f6;
+  --wash: rgba(57,135,229,0.14);
+  color-scheme: dark;
+}
+body { background: var(--page); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 48px; }
+main { max-width: 1040px; margin: 0 auto; display: grid; gap: 40px; }
+header { padding-block: 40px 8px; display: grid; gap: 12px; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: clamp(34px, 5vw, 52px); line-height: 1; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 24px; margin: 0 0 4px; line-height: 1.15; text-wrap: balance; }
+h3 { font-size: 15px; font-weight: 600; margin: 0; }
+p { margin: 0; max-width: 68ch; }
+.lede { font-size: 17px; color: var(--ink-2); max-width: 64ch; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 8px; }
+.kpi { background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 14px 16px; display: grid; gap: 4px; }
+.kpi .v { font-size: 30px; font-weight: 600; line-height: 1.1; }
+.kpi.hero .v { font-size: 50px; }
+.kpi .l { color: var(--ink-2); font-size: 13px; }
+section { display: grid; gap: 14px; }
+.sec-head { display: grid; gap: 6px; }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 14px 16px 12px; display: grid; gap: 10px; min-width: 0; }
+figcaption { color: var(--ink-2); font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font-size: 13px; color: var(--ink-2); }
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.key i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
+.key b { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
+.readout { font-family: var(--font-mono); font-size: 13px; color: var(--ink-2); min-height: 1.6em; }
+.readout strong { color: var(--ink); font-weight: 500; }
+.chains { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; font-family: var(--font-mono); font-size: 12px; }
+.chain { display: grid; gap: 2px; }
+.chain .t { color: var(--muted); font-size: 11px; }
+.chain .slot { display: flex; justify-content: space-between; padding: 1px 6px; border-radius: 3px; color: var(--ink); }
+.chain .slot.empty { color: var(--muted); }
+canvas { display: block; width: 100%; height: auto; }
+.heat { position: relative; }
+.heat .cross { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.6; pointer-events: none; display: none; }
+svg { display: block; width: 100%; height: auto; overflow: visible; font-family: var(--font-mono); font-size: 11px; }
+svg text { fill: var(--muted); }
+svg .ink { fill: var(--ink); }
+svg .ink2 { fill: var(--ink-2); }
+.grid-line { stroke: var(--grid); stroke-width: 1; }
+.axis-line { stroke: var(--axis); stroke-width: 1; }
+.ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--ring); border-radius: 4px; padding: 6px 8px; font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); display: none; z-index: 5; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.tip strong { color: var(--ink); font-weight: 500; }
+.tip .k { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.wrap { position: relative; min-width: 0; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+button { font: inherit; font-size: 13px; color: var(--ink-2); background: transparent; border: 1px solid var(--ring); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+button:hover { color: var(--ink); border-color: var(--axis); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+table { border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; width: 100%; }
+th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; }
+td:first-child, th:first-child { text-align: left; }
+.tbl { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+.phases { display: grid; gap: 14px; }
+.phase { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: start; }
+.phase .n { font-family: var(--font-mono); font-size: 13px; color: var(--muted); padding-top: 3px; }
+.phase h3 { margin-bottom: 4px; }
+.note { font-size: 13px; color: var(--muted); }
+@media (max-width: 560px) { .phase { grid-template-columns: 1fr; gap: 4px; } .chains { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+<main>
+<header>
+  <div class="eyebrow">Simogo's SPL-T · a solver's 2064-split game</div>
+  <h1>SPL-T Clockwork</h1>
+  <p class="lede">How a computer-found game of SPL-T outlasts every score on record: four columns of point blocks kept in a halving chain, a beam search that steers by how long a simple policy would survive, and a lot of luck in where each run wanders.</p>
+  <div class="kpis">
+    <div class="kpi hero"><div class="v">2,064</div><div class="l">splits, best game from scratch (beam width 100, two extra sampled rollouts per child)</div></div>
+    <div class="kpi"><div class="v">1,910</div><div class="l">best score posted publicly (ryederek, March 2026, on the Legacy Collection)</div></div>
+    <div class="kpi"><div class="v">1,277</div><div class="l">the 2022 record, Jonathon Becker, by hand</div></div>
+    <div class="kpi"><div class="v" id="kpi-runs">50</div><div class="l">solver runs in the distribution below</div></div>
+  </div>
+</header>
+
+<section id="s-clock">
+  <div class="sec-head">
+    <h2>The clockwork: four pipes, one value halving down each</h2>
+    <p>Every column pair is a pipe holding a stack of up to eight 2×2 clusters. A cluster is born at the top worth the current move number and is halved each time the cluster beneath it explodes and it falls one slot. Dark cells are high values; each pipe reads as a staircase that drifts down and to the right. Hover for the exact chain at any move.</p>
+  </div>
+  <figure>
+    <div class="row"><span>value</span><span class="key"><b style="background:var(--seq-lo)"></b>1</span><span class="key"><b style="background:color-mix(in oklab, var(--seq-lo), var(--seq-hi) 36%)"></b>16</span><span class="key"><b style="background:color-mix(in oklab, var(--seq-lo), var(--seq-hi) 64%)"></b>128</span><span class="key"><b style="background:var(--seq-hi)"></b>2,048</span><span class="key"><b style="background:var(--surface);border:1px solid var(--axis)"></b>no cluster in slot</span></div>
+    <div class="heat wrap" id="heat-wrap"><canvas id="heat" aria-label="Cluster values per pipe slot over the whole game"></canvas><div class="cross" id="heat-cross"></div></div>
+    <svg id="heat-axis" viewBox="0 0 1000 18" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <div class="readout" id="heat-readout">Move —</div>
+    <div class="chains" id="chains"></div>
+    <figcaption>Rows: pipe A (columns 1–2) at the top, then B, C, D; within a pipe the bottom slot is at the bottom. Color is on a log scale, so each shade step is one halving.</figcaption>
+  </figure>
+</section>
+
+<section id="s-margin">
+  <div class="sec-head">
+    <h2>The search's safety margin</h2>
+    <p>The evaluation that made this possible is blunt: from every candidate position, play the hand-tuned heuristic greedily and count how many moves it survives. The chart shows that count along the final game. Greedy play alone would have died within a few hundred moves from almost any position; the search kept picking positions where that margin stayed above 200 until the board finally filled.</p>
+  </div>
+  <figure>
+    <div class="row"><span class="key"><i style="background:var(--accent)"></i>greedy rollout survives (moves)</span><span class="key"><i style="background:var(--gray)"></i>moves actually remaining in this game</span></div>
+    <div class="wrap"><svg id="margin" viewBox="0 0 1000 300" aria-label="Greedy rollout length and remaining moves along the game"></svg><div class="tip" id="margin-tip"></div></div>
+    <div class="row"><button type="button" data-table="margin">Show as table</button></div>
+    <div class="tbl" id="margin-table" hidden></div>
+    <figcaption>Hover for values. The vertical hairlines mark the moves by which every pipe first held three, then seven clusters, and the point where the margin starts to collapse.</figcaption>
+  </figure>
+</section>
+
+<section id="s-board">
+  <div class="sec-head">
+    <h2>A full board is a healthy board</h2>
+    <p>The first intuition, rewarding free space, was backwards. From move 700 on, 100 to 112 of the 128 cells are point blocks and only three to five blocks can legally be split, yet the game has over a thousand moves left. Free cells are the raw material being turned into the next cluster; everything else is the clockwork running.</p>
+  </div>
+  <div class="two">
+    <figure>
+      <h3>Free cells</h3>
+      <div class="wrap"><svg id="free" viewBox="0 0 500 200" aria-label="Free cells over the game"></svg><div class="tip" id="free-tip"></div></div>
+    </figure>
+    <figure>
+      <h3>Legal moves available</h3>
+      <div class="wrap"><svg id="legal" viewBox="0 0 500 200" aria-label="Legal moves over the game"></svg><div class="tip" id="legal-tip"></div></div>
+    </figure>
+  </div>
+</section>
+
+<section id="s-rank">
+  <div class="sec-head">
+    <h2>How often the search overruled the heuristic</h2>
+    <p>Each child of a beam node is one of the heuristic's four best-rated moves. In Josh Holder's computed games of 2022 the heuristic's first choice was played 98% of the time; here it was played 61% of the time, and in the opening less than half. The search is doing real work, not ratifying the heuristic.</p>
+  </div>
+  <figure>
+    <div class="row" id="rank-legend"></div>
+    <div class="wrap"><svg id="rank" viewBox="0 0 1000 220" aria-label="Share of moves by heuristic rank, per 100-move window"></svg><div class="tip" id="rank-tip"></div></div>
+    <div class="row"><button type="button" data-table="rank">Show as table</button></div>
+    <div class="tbl" id="rank-table" hidden></div>
+    <figcaption>Per 100-move window: the share of moves that were the heuristic's 1st, 2nd, 3rd or 4th choice.</figcaption>
+  </figure>
+</section>
+
+<section id="s-runs">
+  <div class="sec-head">
+    <h2>Fifty runs: the same recipe, wildly different games</h2>
+    <p>The search is deterministic, so a seed only adds tiny noise to the scores, yet the same setting lands anywhere from 1,440 to 1,885. Each run is a chaotic path through the opening; the width of the beam and the rollout cap shift the whole distribution, and every penalty added on top of the plain rollout length made it worse.</p>
+  </div>
+  <figure>
+    <div class="row"><span class="key"><b style="background:var(--accent);border-radius:50%"></b>one run</span><span class="key"><i style="background:var(--gray)"></i>best public scores: 1,277 (2022) and 1,910 (2026)</span></div>
+    <div class="wrap"><svg id="runs" aria-label="Splits per run, grouped by solver setting"></svg><div class="tip" id="runs-tip"></div></div>
+    <div class="row"><button type="button" data-table="runs">Show as table</button></div>
+    <div class="tbl" id="runs-table" hidden></div>
+    <figcaption>Settings sorted by their best run. w = beam width, k = children per node, cap = rollout cap in moves; "stoch 2" adds two sampled rollouts per child; twin / stuck / debt are static penalties that were tried and rejected.</figcaption>
+  </figure>
+</section>
+
+<section id="s-tree">
+  <div class="sec-head">
+    <h2>The beam's family tree</h2>
+    <p>A beam keeps the best thirty (here) or hundred positions at every move and drops the rest. Watching which lineages survive shows the search for what it is: long stretches where every kept position descends from one ancestor a few dozen moves back, punctuated by moments where two or three lineages compete before one wins. The top chart counts how many distinct ancestors, thirty moves back, the thirty kept positions still have; the lower one draws the tree itself for a window you can slide.</p>
+  </div>
+  <figure>
+    <h3>Surviving lineages (distinct ancestors 30 moves back, width-30 run, 1,106 splits)</h3>
+    <div class="wrap"><svg id="lineage" viewBox="0 0 1000 160" aria-label="Number of distinct ancestors thirty levels back"></svg><div class="tip" id="lineage-tip"></div></div>
+  </figure>
+  <figure>
+    <div class="row"><label for="tree-start">Window start (move)</label><span class="readout" id="tree-label"></span></div>
+    <input type="range" id="tree-start" min="1" max="1" value="1" step="1">
+    <div class="row"><span>rollout length</span><span class="key"><b style="background:var(--seq-lo)"></b>0</span><span class="key"><b style="background:color-mix(in oklab, var(--seq-lo), var(--seq-hi) 50%)"></b>100</span><span class="key"><b style="background:var(--seq-hi)"></b>200 (cap)</span><span class="key"><b style="background:var(--axis)"></b>small gray: pruned (no child kept)</span></div>
+    <div class="wrap"><canvas id="tree" aria-label="Beam genealogy for the selected window"></canvas></div>
+    <figcaption>Each column is one move; each dot one kept position, linked to its parent. Children of the same parent are drawn next to each other, so a wide fan is one position whose descendants took over the beam.</figcaption>
+  </figure>
+</section>
+
+<section id="s-phases">
+  <div class="sec-head">
+    <h2>How the game is played, phase by phase</h2>
+    <p>Numbers are from the 2,064-split game; the other long games look the same.</p>
+  </div>
+  <div class="phases" id="phases"></div>
+  <p class="note">Game generated by the rollout beam (heuristic ported from Josh Holder's SPLT emulator); per-move statistics exported from the Rust engine, which replays all four published record games move for move. Nothing here has been replayed on the real game yet.</p>
+</section>
+</main>
+<script src="data.js"></script>
+<script>
+(function () {
+  const G = DATA.game, N = G.splits;
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const isDark = () => document.documentElement.dataset.theme === 'dark' || (document.documentElement.dataset.theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+  const fmt = (n) => n.toLocaleString('en-US');
+  const svgNS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs, parent) { const e = document.createElementNS(svgNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function hexToRgb(h) { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
+  function lerpColor(a, b, t) { const A = hexToRgb(a), B = hexToRgb(b); return 'rgb(' + A.map((x, i) => Math.round(x + (B[i] - x) * t)).join(',') + ')'; }
+  function ticks(max, n) { const raw = max / n, p = Math.pow(10, Math.floor(Math.log10(raw))), s = [1, 2, 5, 10].map(m => m * p).find(v => v >= raw); const out = []; for (let v = 0; v <= max + 1e-9; v += s) out.push(v); return out; }
+
+  // ---------- 1. Pipe heatmap ----------
+  const SLOTS = 8, PIPES = 4, GAP = 3, CELL = 7;
+  const heat = document.getElementById('heat');
+  const heatH = PIPES * SLOTS * CELL + (PIPES - 1) * GAP;
+  function drawHeat() {
+    heat.width = N + 1; heat.height = heatH;
+    const ctx = heat.getContext('2d');
+    ctx.fillStyle = css('--surface'); ctx.fillRect(0, 0, heat.width, heat.height);
+    const lo = css('--seq-lo'), hi = css('--seq-hi');
+    for (let m = 0; m <= N; m++) {
+      const pipes = G.pipes[m];
+      for (let p = 0; p < PIPES; p++) {
+        const chain = pipes[p];
+        for (let s = 0; s < chain.length && s < SLOTS; s++) {
+          const v = chain[s];
+          const t = Math.min(1, Math.log2(Math.max(1, v)) / 11);
+          ctx.fillStyle = lerpColor(lo, hi, t);
+          const y = p * (SLOTS * CELL + GAP) + (SLOTS - 1 - s) * CELL;
+          ctx.fillRect(m, y, 1, CELL);
+        }
+      }
+    }
+    // pipe separators
+    ctx.fillStyle = css('--page');
+    for (let p = 1; p < PIPES; p++) ctx.fillRect(0, p * (SLOTS * CELL + GAP) - GAP, heat.width, GAP);
+  }
+  const axis = document.getElementById('heat-axis');
+  function drawHeatAxis() {
+    axis.innerHTML = '';
+    for (const t of ticks(N, 10)) { const x = t / N * 1000; el('line', { x1: x, y1: 0, x2: x, y2: 4, class: 'axis-line' }, axis); const tx = el('text', { x: x, y: 15, 'text-anchor': t === 0 ? 'start' : (t >= N - 50 ? 'end' : 'middle') }, axis); tx.textContent = fmt(t); }
+  }
+  const chainsEl = document.getElementById('chains'), readout = document.getElementById('heat-readout'), cross = document.getElementById('heat-cross');
+  function showMove(m) {
+    m = Math.max(0, Math.min(N, m));
+    const pipes = G.pipes[m];
+    readout.innerHTML = '';
+    const s1 = document.createElement('span'); s1.textContent = 'Move ';
+    const s2 = document.createElement('strong'); s2.textContent = fmt(m);
+    const s3 = document.createElement('span'); s3.textContent = '  ·  ' + G.free[m] + ' free cells, ' + G.pts[m] + ' point cells, ' + G.legal[m] + ' legal moves, next explosion in ' + G.next[m] + (G.cluster[m] !== '-' && G.cluster[m] !== 'end' ? '  ·  this move makes a cluster (' + G.cluster[m].replace(/^4x/, '2×2 of ') + ')' : '');
+    readout.append(s1, s2, s3);
+    chainsEl.innerHTML = '';
+    const lo = css('--seq-lo'), hi = css('--seq-hi');
+    pipes.forEach((chain, p) => {
+      const d = document.createElement('div'); d.className = 'chain';
+      const t = document.createElement('div'); t.className = 't'; t.textContent = 'pipe ' + 'ABCD'[p] + ' (top → bottom)'; d.appendChild(t);
+      for (let s = SLOTS - 1; s >= 0; s--) {
+        const row = document.createElement('div');
+        if (s < chain.length) {
+          const v = chain[s]; const tt = Math.min(1, Math.log2(Math.max(1, v)) / 11);
+          row.className = 'slot'; row.style.background = lerpColor(lo, hi, tt);
+          row.style.color = tt > 0.55 === !isDark() ? '#ffffff' : '#0b0b0b';
+          if (isDark()) row.style.color = tt > 0.55 ? '#0b0b0b' : '#ffffff';
+          const a = document.createElement('span'); a.textContent = 'slot ' + (s + 1); const b = document.createElement('span'); b.textContent = fmt(v); row.append(a, b);
+        } else { row.className = 'slot empty'; row.textContent = '·'; }
+        d.appendChild(row);
+      }
+      chainsEl.appendChild(d);
+    });
+  }
+  const heatWrap = document.getElementById('heat-wrap');
+  heatWrap.addEventListener('pointermove', (e) => { const r = heat.getBoundingClientRect(); const f = (e.clientX - r.left) / r.width; const m = Math.round(f * N); cross.style.display = 'block'; cross.style.left = (f * 100) + '%'; showMove(m); });
+  heatWrap.addEventListener('pointerleave', () => { cross.style.display = 'none'; });
+
+  // ---------- generic line chart ----------
+  function lineChart(id, series, opts) {
+    const svg = document.getElementById(id); svg.innerHTML = '';
+    const W = opts.w, H = opts.h, L = 44, R = 12, T = 12, B = 26;
+    const xmax = opts.xmax, ymax = opts.ymax;
+    const sx = (x) => L + x / xmax * (W - L - R), sy = (y) => T + (1 - y / ymax) * (H - T - B);
+    for (const t of ticks(ymax, 4)) { el('line', { x1: L, x2: W - R, y1: sy(t), y2: sy(t), class: 'grid-line' }, svg); const tx = el('text', { x: L - 6, y: sy(t) + 4, 'text-anchor': 'end' }, svg); tx.textContent = fmt(t); }
+    for (const t of ticks(xmax, opts.xticks || 8)) { const tx = el('text', { x: sx(t), y: H - 8, 'text-anchor': 'middle' }, svg); tx.textContent = fmt(t); }
+    el('line', { x1: L, x2: W - R, y1: sy(0), y2: sy(0), class: 'axis-line' }, svg);
+    if (opts.marks) for (const mk of opts.marks) { el('line', { x1: sx(mk.x), x2: sx(mk.x), y1: T, y2: sy(0), stroke: css('--axis'), 'stroke-width': 1 }, svg); const tx = el('text', { x: sx(mk.x) + 4, y: T + 10, class: 'ink2' }, svg); tx.textContent = mk.label; }
+    for (const s of series) {
+      if (s.area) { let d = 'M' + sx(0) + ',' + sy(0); s.ys.forEach((y, i) => { d += 'L' + sx(s.xs[i]) + ',' + sy(y); }); d += 'L' + sx(s.xs[s.xs.length - 1]) + ',' + sy(0) + 'Z'; el('path', { d, fill: s.color, opacity: 0.12 }, svg); }
+      let d = ''; s.ys.forEach((y, i) => { d += (i ? 'L' : 'M') + sx(s.xs[i]).toFixed(1) + ',' + sy(y).toFixed(1); });
+      el('path', { d, class: 'ln', stroke: s.color }, svg);
+      if (s.label) { const last = s.ys.length - 1; const tx = el('text', { x: sx(s.xs[last]) - 4, y: sy(s.ys[last]) - 6, 'text-anchor': 'end', class: 'ink2' }, svg); tx.textContent = s.label; }
+    }
+    // hover crosshair + tooltip
+    const cross = el('line', { x1: 0, x2: 0, y1: T, y2: sy(0), stroke: css('--ink'), 'stroke-width': 1, opacity: 0, 'pointer-events': 'none' }, svg);
+    const dots = series.map(s => el('circle', { r: 4, fill: s.color, stroke: css('--surface'), 'stroke-width': 2, opacity: 0, 'pointer-events': 'none' }, svg));
+    const hit = el('rect', { x: L, y: T, width: W - L - R, height: H - T - B, fill: 'transparent' }, svg);
+    const tip = document.getElementById(id + '-tip');
+    hit.addEventListener('pointermove', (e) => {
+      const r = svg.getBoundingClientRect(); const fx = (e.clientX - r.left) / r.width * W; const xv = Math.round((fx - L) / (W - L - R) * xmax);
+      const i = Math.max(0, Math.min(series[0].xs.length - 1, series[0].xs.findIndex(x => x >= xv) === -1 ? series[0].xs.length - 1 : series[0].xs.findIndex(x => x >= xv)));
+      const x = series[0].xs[i]; cross.setAttribute('x1', sx(x)); cross.setAttribute('x2', sx(x)); cross.setAttribute('opacity', 0.5);
+      tip.innerHTML = ''; const h = document.createElement('div'); h.textContent = (opts.xname || 'move') + ' ' + fmt(x); tip.appendChild(h);
+      series.forEach((s, j) => { const y = s.ys[Math.min(i, s.ys.length - 1)]; dots[j].setAttribute('cx', sx(s.xs[Math.min(i, s.xs.length - 1)])); dots[j].setAttribute('cy', sy(y)); dots[j].setAttribute('opacity', 1); const row = document.createElement('div'); const k = document.createElement('span'); k.className = 'k'; k.style.background = s.color; const v = document.createElement('strong'); v.textContent = fmt(y); row.append(k, v, document.createTextNode(' ' + s.name)); tip.appendChild(row); });
+      tip.style.display = 'block'; const px = (e.clientX - r.left), py = (e.clientY - r.top); tip.style.left = Math.min(px + 12, r.width - tip.offsetWidth - 4) + 'px'; tip.style.top = Math.max(0, py - 10 - tip.offsetHeight) + 'px';
+    });
+    hit.addEventListener('pointerleave', () => { tip.style.display = 'none'; cross.setAttribute('opacity', 0); dots.forEach(d => d.setAttribute('opacity', 0)); });
+  }
+  const xs = Array.from({ length: N }, (_, i) => i);
+  const remaining = xs.map(i => N - i);
+  function drawMargin() {
+    lineChart('margin', [
+      { xs, ys: remaining, color: css('--gray'), name: 'moves remaining' },
+      { xs, ys: G.roll.slice(0, N).map(v => Math.max(0, v)), color: css('--accent'), name: 'greedy rollout', label: 'greedy rollout' },
+    ], { w: 1000, h: 300, xmax: N, ymax: 2100, marks: [{ x: 176, label: 'every pipe ≥3 clusters' }, { x: 621, label: 'every pipe ≥7' }, { x: 1800, label: 'margin collapses' }] });
+  }
+  function drawBoard() {
+    lineChart('free', [{ xs, ys: G.free.slice(0, N), color: css('--accent'), name: 'free cells', area: true }], { w: 500, h: 200, xmax: N, ymax: 128, xticks: 4 });
+    lineChart('legal', [{ xs, ys: G.legal.slice(0, N), color: css('--accent'), name: 'legal moves', area: true }], { w: 500, h: 200, xmax: N, ymax: 16, xticks: 4 });
+  }
+
+  // ---------- rank stacked bars ----------
+  const BIN = 100; const bins = [];
+  for (let s = 0; s < N; s += BIN) { const c = [0, 0, 0, 0]; let n = 0; for (let i = s; i < Math.min(N, s + BIN); i++) { if (G.rank[i]) { c[G.rank[i] - 1]++; n++; } } bins.push({ start: s, n, share: c.map(v => n ? v / n : 0), count: c }); }
+  function drawRank() {
+    const svg = document.getElementById('rank'); svg.innerHTML = '';
+    const W = 1000, H = 220, L = 40, R = 12, T = 10, B = 26, cols = [css('--ord-1'), css('--ord-2'), css('--ord-3'), css('--ord-4')];
+    const bw = (W - L - R) / bins.length;
+    const sy = (y) => T + (1 - y) * (H - T - B);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) { el('line', { x1: L, x2: W - R, y1: sy(t), y2: sy(t), class: 'grid-line' }, svg); const tx = el('text', { x: L - 6, y: sy(t) + 4, 'text-anchor': 'end' }, svg); tx.textContent = Math.round(t * 100) + '%'; }
+    const tip = document.getElementById('rank-tip');
+    bins.forEach((b, i) => {
+      let acc = 0; const x = L + i * bw + 2, w = Math.max(1, Math.min(24, bw - 4));
+      const xc = L + i * bw + bw / 2;
+      b.share.forEach((s, r) => { const y0 = sy(acc + s), y1 = sy(acc); el('rect', { x: xc - w / 2, y: y0 + 1, width: w, height: Math.max(0, y1 - y0 - 2), fill: cols[r], rx: r === 3 ? 0 : 0 }, svg); acc += s; });
+      if (i % 2 === 0) { const tx = el('text', { x: xc, y: H - 8, 'text-anchor': 'middle' }, svg); tx.textContent = fmt(b.start); }
+      const hit = el('rect', { x: L + i * bw, y: T, width: bw, height: H - T - B, fill: 'transparent' }, svg);
+      hit.addEventListener('pointermove', (e) => { const r = svg.getBoundingClientRect(); tip.innerHTML = ''; const h = document.createElement('div'); h.textContent = 'moves ' + fmt(b.start) + '–' + fmt(Math.min(N, b.start + BIN) - 1); tip.appendChild(h); b.share.forEach((s, k) => { const row = document.createElement('div'); const sw = document.createElement('span'); sw.className = 'k'; sw.style.background = cols[k]; const v = document.createElement('strong'); v.textContent = Math.round(s * 100) + '%'; row.append(sw, v, document.createTextNode(' rank ' + (k + 1) + ' (' + b.count[k] + ')')); tip.appendChild(row); }); tip.style.display = 'block'; const px = e.clientX - r.left, py = e.clientY - r.top; tip.style.left = Math.min(px + 12, r.width - tip.offsetWidth - 4) + 'px'; tip.style.top = Math.max(0, py - 10 - tip.offsetHeight) + 'px'; });
+      hit.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
+    });
+    const lg = document.getElementById('rank-legend'); lg.innerHTML = '';
+    ['1st choice', '2nd', '3rd', '4th'].forEach((n, i) => { const k = document.createElement('span'); k.className = 'key'; const b = document.createElement('b'); b.style.background = cols[i]; k.append(b, document.createTextNode(n)); lg.appendChild(k); });
+  }
+
+  // ---------- runs dot strip ----------
+  function drawRuns() {
+    const svg = document.getElementById('runs'); svg.innerHTML = '';
+    const groups = new Map();
+    for (const r of DATA.runs) { if (!groups.has(r.config)) groups.set(r.config, []); groups.get(r.config).push(r); }
+    const rows = [...groups.entries()].map(([c, rs]) => ({ config: c, runs: rs, max: Math.max(...rs.map(r => r.splits)) })).sort((a, b) => b.max - a.max);
+    const W = 1000, RH = 22, L = 230, R = 30, T = 24, B = 26, H = T + rows.length * RH + B;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    const xmin = 600, xmax = 2200; const sx = (v) => L + (v - xmin) / (xmax - xmin) * (W - L - R);
+    for (const t of [800, 1000, 1200, 1400, 1600, 1800, 2000, 2200]) { el('line', { x1: sx(t), x2: sx(t), y1: T - 6, y2: H - B, class: 'grid-line' }, svg); const tx = el('text', { x: sx(t), y: H - 8, 'text-anchor': 'middle' }, svg); tx.textContent = fmt(t); }
+    for (const rec of [{ v: 1277, l: '1,277 (2022)' }, { v: 1910, l: '1,910 (2026)' }]) {
+      el('line', { x1: sx(rec.v), x2: sx(rec.v), y1: T - 10, y2: H - B, stroke: css('--gray'), 'stroke-width': 2 }, svg);
+      const rl = el('text', { x: sx(rec.v) + 5, y: T - 12, class: 'ink2' }, svg); rl.textContent = rec.l;
+    }
+    const tip = document.getElementById('runs-tip');
+    rows.forEach((row, i) => {
+      const y = T + i * RH + RH / 2;
+      const lab = el('text', { x: L - 10, y: y + 4, 'text-anchor': 'end', class: i === 0 ? 'ink' : 'ink2' }, svg); lab.textContent = row.config;
+      el('line', { x1: L, x2: W - R, y1: y, y2: y, class: 'grid-line' }, svg);
+      row.runs.forEach(r => {
+        const dot = el('circle', { cx: sx(r.splits), cy: y, r: 5, fill: css('--accent'), stroke: css('--surface'), 'stroke-width': 2 }, svg);
+        const hit = el('circle', { cx: sx(r.splits), cy: y, r: 12, fill: 'transparent' }, svg);
+        hit.addEventListener('pointermove', (e) => { const b = svg.getBoundingClientRect(); tip.innerHTML = ''; const h = document.createElement('strong'); h.textContent = fmt(r.splits) + ' splits'; const d = document.createElement('div'); d.textContent = row.config + ' · seed ' + r.seed; tip.append(h, d); tip.style.display = 'block'; const px = e.clientX - b.left, py = e.clientY - b.top; tip.style.left = Math.min(px + 12, b.width - tip.offsetWidth - 4) + 'px'; tip.style.top = Math.max(0, py - 10 - tip.offsetHeight) + 'px'; dot.setAttribute('r', 6.5); });
+        hit.addEventListener('pointerleave', () => { tip.style.display = 'none'; dot.setAttribute('r', 5); });
+      });
+      if (i === 0) { const best = Math.max(...row.runs.map(r => r.splits)); const tx = el('text', { x: sx(best) + 10, y: y + 4, class: 'ink' }, svg); tx.textContent = fmt(best); }
+    });
+    document.getElementById('kpi-runs').textContent = DATA.runs.length;
+    return rows;
+  }
+
+  // ---------- beam genealogy ----------
+  const TR = DATA.tree, TW = DATA.tree_width;
+  // order nodes within each level by lineage (children of the same parent adjacent, parents in their own order)
+  const order = TR.map(() => null), pos = TR.map(() => null);
+  order[0] = TR[0].p.map((_, i) => i); pos[0] = []; order[0].forEach((n, k) => pos[0][n] = k);
+  for (let L = 1; L < TR.length; L++) {
+    const idx = TR[L].p.map((_, i) => i);
+    idx.sort((a, b) => (pos[L - 1][TR[L].p[a]] - pos[L - 1][TR[L].p[b]]) || (a - b));
+    order[L] = idx; pos[L] = []; idx.forEach((n, k) => pos[L][n] = k);
+  }
+  const hasChild = TR.map((lvl, L) => { const h = lvl.p.map(() => false); if (L + 1 < TR.length) for (const p of TR[L + 1].p) h[p] = true; return h; });
+  function lineageCounts(back) { const out = []; for (let L = 0; L < TR.length; L++) { if (L < back) { out.push(TR[L].p.length === 1 ? 1 : new Set(TR[L].p).size); continue; } const anc = new Set(); for (let i = 0; i < TR[L].p.length; i++) { let n = i, l = L; for (let s = 0; s < back; s++) { n = TR[l].p[n]; l--; } anc.add(n); } out.push(anc.size); } return out; }
+  function drawLineage() {
+    const counts = lineageCounts(30); const lx = counts.map((_, i) => i + 1);
+    lineChart('lineage', [{ xs: lx, ys: counts, color: css('--accent'), name: 'distinct ancestors 30 back', area: true }], { w: 1000, h: 160, xmax: TR.length, ymax: TW, xticks: 10, xname: 'move' });
+  }
+  const treeCanvas = document.getElementById('tree'), slider = document.getElementById('tree-start'), treeLabel = document.getElementById('tree-label');
+  const WIN = 140, SX = 7, SY = 7;
+  slider.max = Math.max(1, TR.length - WIN);
+  slider.value = Math.min(+slider.max, 500);
+  function drawTree() {
+    const s = +slider.value - 1; const e = Math.min(TR.length, s + WIN);
+    treeLabel.textContent = 'moves ' + fmt(s + 1) + ' to ' + fmt(e);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = (WIN + 1) * SX, h = (TW + 1) * SY + 10;
+    treeCanvas.width = w * dpr; treeCanvas.height = h * dpr; treeCanvas.style.aspectRatio = w + ' / ' + h;
+    const ctx = treeCanvas.getContext('2d'); ctx.scale(dpr, dpr);
+    ctx.fillStyle = css('--surface'); ctx.fillRect(0, 0, w, h);
+    const lo = css('--seq-lo'), hi = css('--seq-hi'), dead = css('--axis');
+    ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
+    for (let L = s + 1; L < e; L++) { const x = (L - s) * SX + 3; for (let i = 0; i < TR[L].p.length; i++) { const y = pos[L][i] * SY + 8, py = pos[L - 1][TR[L].p[i]] * SY + 8; ctx.beginPath(); ctx.moveTo(x - SX, py); ctx.lineTo(x, y); ctx.stroke(); } }
+    for (let L = s; L < e; L++) { const x = (L - s) * SX + 3; for (let i = 0; i < TR[L].r.length; i++) { const y = pos[L][i] * SY + 8; const t = Math.min(1, Math.max(0, TR[L].r[i]) / 200); const isDead = !hasChild[L][i] && L + 1 < TR.length; ctx.fillStyle = isDead ? dead : lerpColor(lo, hi, t); ctx.beginPath(); ctx.arc(x, y, isDead ? 1.4 : 2.6, 0, Math.PI * 2); ctx.fill(); } }
+  }
+  slider.addEventListener('input', drawTree);
+
+  // ---------- phases ----------
+  const phases = [
+    { n: 'Moves 0–100', t: 'Opening: cut the slab', d: 'The board starts as one 8×16 block and the first hundred moves carve it into 2×2 and 2×4 pieces. Ninety free cells on average, nine legal moves, and the first clusters are worth under 100. The search departs from the heuristic most here (its first choice is played only 43% of the time): the opening decides which columns become pipes and how their timing is staggered, and it is where the seed-to-seed variance of the whole run is born.' },
+    { n: 'Moves 100–350', t: 'Build-up: raise the pipes', d: 'By move 82 every column pair holds two clusters, by 176 three, by 346 five. Free cells fall from 58 to 35 per board. The chains are not yet geometric: adjacent clusters have a median ratio near 1 because they were all made within a few dozen moves of each other, so the first explosions free only small values.' },
+    { n: 'Moves 350–900', t: 'Settling: the chains turn geometric', d: 'Every pipe holds seven clusters from move 621. Each explosion at the bottom of a pipe drops the whole stack a slot and halves it, and because new clusters keep arriving worth the move number, the stack sorts itself into a staircase. Twin clusters (adjacent values within 1.5×) are still common, around eight per board, and this is where weak runs go wrong: a big cluster landing at the bottom of a pipe with nothing beneath it can only count down, and it drags that pipe for hundreds of moves.' },
+    { n: 'Moves 900–1,800', t: 'Steady state: the clockwork', d: 'The median ratio between adjacent clusters locks at 2.1 and twins fall to two or three per board. One cluster is created every 3.17 moves, which is exactly the throughput the arithmetic demands: an explosion frees a 2×2 block, three splits turn it into the next cluster, so four pipes must each fire about once every twelve moves. Nearly all clusters (626 of 651) are 2×2 groups of 1×1 blocks, built by keeping three of the four pieces ready and making the last split at the moment that earns an extra halving. The board carries 100–112 point cells, only four or five legal moves, and a greedy rollout margin of 200–260 moves.' },
+    { n: 'Moves 1,800–2,064', t: 'Endgame: the ceiling', d: 'Top clusters are now worth 1,800+. To arrive at the bottom small enough to explode on time they need seven halvings, which means every slot of every pipe is occupied and there is no slack left to stagger. The greedy margin collapses from 240 to 32 moves, the heuristic\'s first choice becomes the only reasonable one (80% of moves), and the game ends with the board full of point blocks and the last free blocks the wrong shape for the required direction. A pipe that is eight deep can in principle keep its interval under twelve moves until about move 3,000, but only with no slack at all; the game dies around 2,000 because keeping a few free cells for timing errors costs halvings.' },
+  ];
+  const ph = document.getElementById('phases');
+  for (const p of phases) { const d = document.createElement('div'); d.className = 'phase'; const n = document.createElement('div'); n.className = 'n'; n.textContent = p.n; const b = document.createElement('div'); const h = document.createElement('h3'); h.textContent = p.t; const t = document.createElement('p'); t.textContent = p.d; b.append(h, t); d.append(n, b); ph.appendChild(d); }
+
+  // ---------- tables ----------
+  function table(id, head, rows) { const box = document.getElementById(id); box.innerHTML = ''; const t = document.createElement('table'); const tr = document.createElement('tr'); for (const h of head) { const th = document.createElement('th'); th.textContent = h; tr.appendChild(th); } t.appendChild(tr); for (const r of rows) { const tr2 = document.createElement('tr'); for (const c of r) { const td = document.createElement('td'); td.textContent = c; tr2.appendChild(td); } t.appendChild(tr2); } box.appendChild(t); }
+  let runRows = [];
+  document.querySelectorAll('button[data-table]').forEach(btn => btn.addEventListener('click', () => {
+    const k = btn.dataset.table; const box = document.getElementById(k + '-table');
+    if (box.hidden) {
+      if (k === 'margin') table(k + '-table', ['move', 'greedy rollout', 'moves remaining', 'free cells', 'legal moves'], xs.filter(i => i % 50 === 0).map(i => [fmt(i), fmt(Math.max(0, G.roll[i])), fmt(N - i), G.free[i], G.legal[i]]));
+      if (k === 'rank') table(k + '-table', ['moves', 'rank 1', 'rank 2', 'rank 3', 'rank 4'], bins.map(b => [fmt(b.start) + '–' + fmt(Math.min(N, b.start + BIN) - 1), ...b.count]));
+      if (k === 'runs') table(k + '-table', ['setting', 'runs', 'best', 'mean', 'all'], runRows.map(r => [r.config, r.runs.length, fmt(r.max), fmt(Math.round(r.runs.reduce((a, x) => a + x.splits, 0) / r.runs.length)), r.runs.map(x => x.splits).sort((a, b) => a - b).join(', ')]));
+      box.hidden = false; btn.textContent = 'Hide table';
+    } else { box.hidden = true; btn.textContent = 'Show as table'; }
+  }));
+
+  function drawAll() { drawHeat(); drawHeatAxis(); showMove(1500); drawMargin(); drawBoard(); drawRank(); runRows = drawRuns(); drawLineage(); drawTree(); }
+  drawAll();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
+  new MutationObserver(drawAll).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+})();
+</script>
