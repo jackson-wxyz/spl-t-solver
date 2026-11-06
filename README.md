@@ -8,7 +8,7 @@ ideally, beat the world record.
 
 | | splits |
 |---|---|
-| Jackson's personal best | 477 |
+| Repo owner's personal best (by hand) | 477 |
 | This solver, from scratch (beam width 800, ~1 min on the laptop) | **522** (`runs/best/scratch_522.txt`) |
 | Josh Holder's best computed + hand-tuned sequence (2022) | 1208 |
 | This solver, re-searching the last 108 moves of that 1208 game | 1209 (`runs/best/endgame_from_josh1208_at1100_1209.txt`) |
@@ -100,6 +100,9 @@ halving feedback loop (`pipeline_model`). None of these has yet produced late-ga
 to the record's.
 
 ## Next steps (ideas)
+
+The full story of what was tried, what failed, and why is in
+[docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
 
 - **Tune the evaluation from expert play**: fit the weights so that, at each position of the
   record games, the record's move scores higher than its siblings (conditional-logit /
