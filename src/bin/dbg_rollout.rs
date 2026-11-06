@@ -15,13 +15,16 @@ fn main() {
         let (ng, _) = play_out(&mut g, Policy::Greedy, 0);
         let mut a = b.clone();
         let (na, _) = play_out(&mut a, Policy::AvoidBig, 0);
+        let f = splt::search::features(&b, &splt::search::Params::default());
         println!(
-            "from move {keep}: greedy +{ng} -> {}, avoidbig +{na} -> {} (sequence itself reaches {}); twins here {} / at greedy end {}",
+            "from move {keep}: greedy +{ng} -> {}, avoidbig +{na} -> {} (sequence itself reaches {}); twins here {} / at greedy end {}; stuck {:.0} debt {:.1}",
             keep + ng,
             keep + na,
             moves.len(),
             splt::pipes::twins(&b, 1.5, 20),
-            splt::pipes::twins(&g, 1.5, 20)
+            splt::pipes::twins(&g, 1.5, 20),
+            f.stuck,
+            f.debt
         );
         print!("{}", g.render());
     }

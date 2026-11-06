@@ -94,6 +94,15 @@ fn main() {
     // Static penalty per "twin" cluster pair in the child position (see pipes::twins).
     let wtwin: f32 = arg(&args, "--wtwin").unwrap_or(0.0);
     let twin_ratio: f64 = arg(&args, "--twinratio").unwrap_or(1.5);
+    // Static penalty per cell of point-block area that is still on the board after
+    // `--stuckt` moves with no further splits (slow poison: a big cluster at the bottom of a
+    // pipe, which no rollout of cap length can see the end of).
+    let wstuck: f32 = arg(&args, "--wstuck").unwrap_or(0.0);
+    let stuck_t: u16 = arg(&args, "--stuckt").unwrap_or(250);
+    // Static penalty on `debt`: point-block area integrated over the passive look-ahead
+    // (400 moves), divided by the board area. Long-lived clusters cost the most.
+    let wdebt: f32 = arg(&args, "--wdebt").unwrap_or(0.0);
+    let p = Params { stuck_t, ..Params::default() };
     // --policy greedy | avoidbig | both   (both = the longer of the two rollouts)
     let pol_name: String = arg(&args, "--policy").unwrap_or_else(|| "greedy".to_string());
     let pols: Vec<Policy> = match pol_name.as_str() {
@@ -102,7 +111,6 @@ fn main() {
     };
     let out: String = arg(&args, "--out").unwrap_or_else(|| "runs".to_string());
     let quiet = args.iter().any(|a| a == "--quiet");
-    let p = Params::default();
 
     let mut prefix: Vec<u8> = Vec::new();
     if let Some(path) = arg::<String>(&args, "--prefix") {
@@ -163,6 +171,10 @@ fn main() {
                 if !over {
                     // Tie-break among rollouts that hit the cap by the end state's short-term health.
                     s += tie * features(&end, &p).survive;
+                }
+                if wstuck != 0.0 || wdebt != 0.0 {
+                    let f = features(&c, &p);
+                    s -= wstuck * f.stuck + wdebt * f.debt;
                 }
                 if wtwin != 0.0 {
                     s -= wtwin * splt::pipes::twins(&c, twin_ratio, 20) as f32;
@@ -248,7 +260,7 @@ fn main() {
     let body: Vec<String> = moves.iter().map(|m| m.to_string()).collect();
     std::fs::write(&path, format!("[{}]\n", body.join(", "))).unwrap();
     println!(
-        "RESULT splits={} start={} width={width} k={k} rollout={cap} tie={tie} policy={pol_name} stoch={stoch} temp={temp} wtwin={wtwin} seed={seed} noise={noise} rollouts={rollouts} time={secs:.1}s -> {path}",
+        "RESULT splits={} start={} width={width} k={k} rollout={cap} tie={tie} policy={pol_name} stoch={stoch} temp={temp} wtwin={wtwin} wstuck={wstuck} stuckt={stuck_t} wdebt={wdebt} seed={seed} noise={noise} rollouts={rollouts} time={secs:.1}s -> {path}",
         b.moves, start.moves
     );
 }

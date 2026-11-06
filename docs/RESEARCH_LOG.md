@@ -267,8 +267,21 @@ The rollout-beam games depart from the greedy choice at about a third of their m
   clusters in one pipe with nearly equal values (853 / 845 / 847, or 368 / 368 / 358 / 351 /
   354). A cluster placed on a pipe before the one beneath it has been halved breaks the
   geometric chain and wastes a slot. `src/pipes.rs` has a `twins` count (`--wtwin` in
-  rbeam); as a static feature it is only weakly separating (2-8 twins on live boards, 1-6 on
-  dead ones), so treat it as an experiment, not a finding.
+  rbeam). As a static feature it is only weakly separating (2-8 twins on live boards, 1-6
+  on dead ones), and **as a penalty it is harmful**: `--wtwin 3` gave 1389 / 1013 / 915 and
+  `--wtwin 1` gave 970 / 812 / 834 (3 seeds, cap 200) against 1440 / 1855 / 1885 without it.
+  Twins near the top of a pipe are often the right move (the halving-timing trick stacks
+  two clusters that will be halved together).
+- **A second failure mode: slow poison.** A weak run (1215 at cap 200 with two stochastic
+  rollouts, seed 2) had, by move 1100, a 572-valued cluster at the very bottom of a pipe with
+  nothing beneath it, and that pipe fragmented into 1-wide columns with a permanent
+  one-column void. A 200-move rollout cannot see the end of that. Session 1's passive
+  look-ahead features do: `stuck` (point area still present after 250 passive moves) is
+  58-68 for that game at moves 900-1100 versus 8-24 for the good games, and `debt` 190-222
+  versus 65-108. Both are now rbeam options (`--wstuck`, `--wdebt`); results below.
+- **Two extra stochastic rollouts per child** (`--stoch 2 --temp 3`, keep the longest of
+  three): 2064 / 1215 / 1511 over three seeds at cap 200, three times the cost. Not
+  consistently better than one greedy rollout, but it produced the best game.
 - The "avoid big clusters" rollout policy (take the best move that does not create point
   blocks bigger than 1×1) differs from greedy at 18 of 534 moves of the greedy game and
   scores 435 from scratch, so it is not simply better; `--policy both` takes the longer of
