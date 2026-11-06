@@ -420,3 +420,124 @@ pub fn greedy_play(b: &mut Board, max_moves: usize) -> usize {
     }
     b.moves as usize - start
 }
+
+/// Rollout / play policies built on the heuristic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Policy {
+    /// The reference scripts' choice: the highest weight.
+    Greedy,
+    /// Highest weight among moves that do not create point blocks bigger than 1x1; falls
+    /// back to the greedy choice when every move does. (ParanoidPlay's backtracking
+    /// explores exactly these alternatives.)
+    AvoidBig,
+}
+
+impl std::str::FromStr for Policy {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "greedy" => Ok(Policy::Greedy),
+            "avoidbig" => Ok(Policy::AvoidBig),
+            _ => Err(format!("unknown policy {s}")),
+        }
+    }
+}
+
+/// Would splitting block `i` (which has cluster mask `mask`) create point blocks bigger
+/// than 1x1?
+#[inline]
+pub fn makes_big_cluster(b: &Board, i: usize, mask: u128) -> bool {
+    if mask == 0 {
+        return false;
+    }
+    let bl = b.blocks[i];
+    !(if b.horizontal_next() { bl.w == 1 && bl.h == 2 } else { bl.w == 2 && bl.h == 1 })
+}
+
+pub fn choose(b: &Board, pol: Policy) -> Option<usize> {
+    let a = analyse(b);
+    let ws = weights_from(b, &a);
+    match pol {
+        Policy::Greedy => best_move(&ws),
+        Policy::AvoidBig => {
+            let mut best: Option<(usize, f64)> = None;
+            let mut fallback: Option<(usize, f64)> = None;
+            for (i, &w) in ws.iter().enumerate() {
+                if w <= 0.0 {
+                    continue;
+                }
+                let slot = if makes_big_cluster(b, i, a.cluster[i]) { &mut fallback } else { &mut best };
+                if slot.is_none_or(|(_, bw)| w > bw) {
+                    *slot = Some((i, w));
+                }
+            }
+            best.or(fallback).map(|(i, _)| i)
+        }
+    }
+}
+
+/// Play `pol` until the game ends or `cap` moves (0 = no cap). Returns (moves played, over).
+pub fn play_out(b: &mut Board, pol: Policy, cap: usize) -> (usize, bool) {
+    let mut n = 0usize;
+    loop {
+        if cap > 0 && n >= cap {
+            return (n, false);
+        }
+        let Some(m) = choose(b, pol) else { return (n, true) };
+        b.play(m).unwrap();
+        n += 1;
+    }
+}
+
+#[inline]
+fn xorshift(s: &mut u64) -> u64 {
+    *s ^= *s << 13;
+    *s ^= *s >> 7;
+    *s ^= *s << 17;
+    *s
+}
+
+/// Sample a move with probability proportional to exp(weight / temp) (temp <= 0: proportional
+/// to the weight itself, as in Josh Holder's weighted_random.py).
+pub fn choose_stochastic(b: &Board, temp: f64, rng: &mut u64) -> Option<usize> {
+    let ws = weights(b);
+    let mut probs = [0f64; MAXB];
+    let mut total = 0f64;
+    let wmax = ws.iter().copied().fold(0.0, f64::max);
+    if wmax <= 0.0 {
+        return None;
+    }
+    for (i, &w) in ws.iter().enumerate() {
+        if w > 0.0 {
+            let p = if temp > 0.0 { ((w - wmax) / temp).exp() } else { w };
+            probs[i] = p;
+            total += p;
+        }
+    }
+    let mut r = (xorshift(rng) >> 11) as f64 / (1u64 << 53) as f64 * total;
+    let mut last = None;
+    for (i, &p) in probs[..ws.len()].iter().enumerate() {
+        if p > 0.0 {
+            last = Some(i);
+            r -= p;
+            if r < 0.0 {
+                return Some(i);
+            }
+        }
+    }
+    last
+}
+
+/// Stochastic play-out seeded by `seed` (deterministic for a given seed).
+pub fn play_out_stochastic(b: &mut Board, temp: f64, seed: u64, cap: usize) -> (usize, bool) {
+    let mut rng = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+    let mut n = 0usize;
+    loop {
+        if cap > 0 && n >= cap {
+            return (n, false);
+        }
+        let Some(m) = choose_stochastic(b, temp, &mut rng) else { return (n, true) };
+        b.play(m).unwrap();
+        n += 1;
+    }
+}

@@ -14,14 +14,14 @@ worked, what didn't, and what I'd do next. Read [README.md](../README.md) and
   its last move. The 1133 sequence was played by hand on a real iPhone as the 2022 world
   record. So treat the engine as ground truth, quirks included. It runs at about 1.3M
   moves/s on one laptop thread.
-- **The search is not solved.** Beam search with hand-built evaluations reaches **522**
-  from scratch. That beats the owner's 477 hand score, but the world record is **1277**
-  (Jonathon Becker / @mangosquash, by hand, 2022). Starting from the end of Josh Holder's
-  1208 game, the beam found a 1209 finish.
-- **The bottleneck is the evaluation function, not compute.** Proof: from move 900 of the
-  1208 record game, beam widths 50, 200, 1000 and 4000 all die at 1035-1077. Several
-  evaluation variants recover only about 20-25% of the record player's remaining moves from
-  mid-game record positions. Moving to the desktop won't help until the evaluation improves.
+- **Session 1's search was not the answer; session 2's is.** Beam search with hand-built
+  evaluations reached 522 from scratch. Session 2 (below, "Session 2") replaced the
+  evaluation with *rollouts of Josh Holder's ported heuristic*: **1885 from scratch** at
+  beam width 100 in under a minute, and 1984 resuming his 1208 game at move 700. The world
+  record is **1277** (Jonathon Becker / @mangosquash, by hand, 2022). Nothing has been played
+  on the real game yet.
+- **The bottleneck was the evaluation function, not compute.** Session 1 proved it (beam
+  widths 50-4000 from move 900 of the 1208 game all died at 1035-1077); session 2 fixed it.
 
 ## The game in one paragraph
 
@@ -178,6 +178,102 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
 - **GPUs** suit a learned evaluation (batched network inference over the beam's thousands of
   children) far better than the engine itself. The engine is branchy, with irregular
   per-board loops.
+
+## Session 2 (2026-11-06, desktop, Claude Fable 5.1): rollout beam, 1780 from scratch
+
+Hardware: Ryzen 5 7600 (6 cores / 12 threads), RTX 5070 Ti + RTX 3070 (unused so far).
+Rust had to be installed (`winget install Rustlang.Rustup`; cargo is not on the tool shells'
+PATH, use `~/.cargo/bin`). The engine runs at 2.7M random-game moves/s per thread here.
+Opus's 5× search speedups (previous section) were pulled mid-session; nothing in
+`search.rs`/`engine.rs` was touched by this session.
+
+### What changed
+
+The bottleneck was the evaluation, so the evaluation was replaced, not tuned:
+
+1. **Josh Holder's move-scoring heuristic was ported** (`src/heuristic.rs`, from
+   `weighting.py` + the parts of `core_update.py` it reads). The port is validated the strong
+   way: his Python runs fine here (`python -I` on the clone), so `josh_dump` prints the Rust
+   weights in the same format as a Python dump and the two were diffed at **all 4,590
+   positions of the four record games: zero mismatches** to 4 decimals. Quirks are kept on
+   purpose (e.g. the near-tie "tracker" in ParanoidPlay is reassigned rather than counted, so
+   near-tie decision points never fire before move 875; a parabola evaluated at the wrong
+   variable; `aboutToLose` can never be true). Greedy play with the heuristic scores **534
+   from scratch**, which is exactly the first game in his `logParanoid_final.txt`, at
+   **3.4 µs per move** (his Python: several ms).
+2. **How much of the record is the heuristic?** The record move is the greedy choice at
+   98.9% of positions in the 1053 game, 98.0% in 1133, 94.8% in 1208 (which had human
+   edits). The rest are ranks 2-5. So the records are "greedy + a few percent of
+   backtracking corrections". But greedy is brittle away from its own trajectory: resumed
+   from moves 500 / 700 / 900 / 1100 of the 1208 game it adds only 113 / 73 / 10 / 96 moves.
+3. **ParanoidPlay ported** (`src/bin/paranoid.rs`). It reproduces his log nearly game for
+   game (685 after 193 games, 748 after 231, 1000 after 652 vs his 657) in 0.1 s; 640k games
+   in 60 s reach 1059. Useful as a baseline and for endgame polishing, but it is a DFS over
+   ~2% of the moves and plateaus.
+4. **The rollout beam** (`src/bin/rbeam.rs`) is the result. Beam search where (a) each node
+   expands only its top-k heuristic moves (k = 4), and (b) **each child is scored by how many
+   moves a greedy heuristic rollout survives from it** (capped), with the end state's passive
+   `survive` feature as a tie-break among rollouts that hit the cap. Every rollout that
+   reaches the end of the game is a complete legal game, so the best game is the best
+   (depth + rollout) seen anywhere, and it is reconstructed and replayed from scratch before
+   being written. Children are deduplicated by position hash; rollouts run in parallel with
+   rayon.
+
+### Results (all verified with `replay`, which checks invariants after every move)
+
+| Start | Width / k / cap | Splits | Time (12 threads) |
+|---|---|---|---|
+| 1208 record game, move 900 (record went on to 1208; old beam 1035-1077) | 100 / 4 / 300 | **1881** | 19 s |
+| 1208 record game, move 700 | 100 / 4 / 300 | **1984** | 28 s |
+| 1208 record game, move 500 | 100 / 4 / 300 | 1226 | 13 s |
+| scratch | 100 / 4 / 300 | 1308 | 30 s |
+| scratch | 300 / 4 / 300 | 1352 | 88 s |
+| scratch | 100 / 8 / 300 | 1359 | 42 s |
+| scratch | 100 / 2 / 300 | 1337 | 17 s |
+| scratch | 100 / 4 / 600 | 1508 | 39 s |
+| scratch | 100 / 4 / none | 1508 | 40 s |
+| scratch | 100 / 4 / 150 | **1780** | 27 s |
+
+The world record is 1277 (by hand). The 1984-split game shows the clockwork at full
+stretch: at move 1500 every pipe reads about 1490 / 730 / 350 / 160 / 70 / 30 / 10 from top
+to bottom. Both long games end the same way: all 32 slots hold clusters and the last free
+blocks are 1 tall when a horizontal split is due.
+
+The rollout-beam games depart from the greedy choice at about a third of their moves
+(ranks 2-4), versus 2% for the record games, so the rollout evaluation is doing real work.
+
+### Observations
+
+- **Rollout cap matters and is not monotone** (150 → 1780, 300 → 1308, 600 → 1508). With a
+  long cap the beam penalizes positions where greedy fails late, which the beam itself could
+  repair; a short cap measures near-term viability and leaves the long-run repair to the
+  search. The search is deterministic, so every number above is one chaotic sample; a
+  `--seed` option now adds tiny deterministic score noise so a setting can be sampled
+  several times. Width 100, k 4, three seeds each, from scratch:
+
+  | Rollout cap | Seeds 1 / 2 / 3 | Mean | Time per run |
+  |---|---|---|---|
+  | 50 | 1299 / 1267 / 1379 | 1315 | 9 s |
+  | 100 | 1217 / 1359 / 1244 | 1273 | 15 s |
+  | 150 | 1146 / 1465 / 1471 | 1361 | 21 s |
+  | **200** | 1440 / 1855 / **1885** | **1727** | 34 s |
+  | 300 | 1654 / 1475 / 1378 | 1502 | 33 s |
+  | 150, `--policy both` | 1391 / 1430 / 1305 | 1375 | 51 s |
+
+  Cap 200 is the setting to use; the seed-to-seed spread (1440 to 1885) means many seeds
+  should be run and the best kept. `--policy both` buys nothing for twice the cost.
+- **Why greedy rollouts die**: from strong positions (moves 600 / 1000 / 1400 of the 1780
+  game) greedy adds 255 / 154 / 183 moves and the dead board always shows "twins": adjacent
+  clusters in one pipe with nearly equal values (853 / 845 / 847, or 368 / 368 / 358 / 351 /
+  354). A cluster placed on a pipe before the one beneath it has been halved breaks the
+  geometric chain and wastes a slot. `src/pipes.rs` has a `twins` count (`--wtwin` in
+  rbeam); as a static feature it is only weakly separating (2-8 twins on live boards, 1-6 on
+  dead ones), so treat it as an experiment, not a finding.
+- The "avoid big clusters" rollout policy (take the best move that does not create point
+  blocks bigger than 1×1) differs from greedy at 18 of 534 moves of the greedy game and
+  scores 435 from scratch, so it is not simply better; `--policy both` takes the longer of
+  the two rollouts at double cost. `--stoch N --temp T` adds N softmax-sampled rollouts per
+  child (seeded, replayable) and keeps the longest.
 
 ## What I believe about the game (theory)
 

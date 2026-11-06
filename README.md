@@ -4,15 +4,22 @@ An attempt to find very long games of Simogo's *SPL-T* (2015). The score is the 
 splits made before no split is possible. Goal: understand what optimal play looks like and,
 ideally, beat the world record.
 
-## Status (2026-11-06)
+## Status (2026-11-06, end of session 2)
 
 | | splits |
 |---|---|
 | Repo owner's personal best (by hand) | 477 |
-| This solver, from scratch (beam width 800, ~1 min on the laptop) | **522** (`runs/best/scratch_522.txt`) |
+| First beam search with hand-built evaluation (session 1) | 522 (`runs/best/scratch_522.txt`) |
 | Josh Holder's best computed + hand-tuned sequence (2022) | 1208 |
-| This solver, re-searching the last 108 moves of that 1208 game | 1209 (`runs/best/endgame_from_josh1208_at1100_1209.txt`) |
-| World record: Jonathon Becker (@mangosquash), late 2022, by hand | **1277** |
+| World record: Jonathon Becker (@mangosquash), late 2022, by hand | 1277 |
+| **Rollout beam, from scratch** (`rbeam`, width 100, k 4, cap 200, seed 3, ~40 s on the desktop) | **1885** (`runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt`) |
+| Rollout beam resuming Josh Holder's 1208 game at move 700 | 1984 (`runs/best/from_josh1208_at700_1984_rbeam_w100_k4_r300.txt`) |
+
+The engine replays all four published record games move for move, and every sequence in
+`runs/best/` is re-verified by `replay`, which checks the engine's invariants after every
+move. What has **not** been done is playing a solver sequence on the real game: a record
+claim needs that, and the sequences are block-index lists in engine order, so it needs the
+human replay tool listed under "Next steps".
 
 ## Prior art (the key find)
 
@@ -51,8 +58,23 @@ Of the approaches considered, existing open-source code turned out to be the rig
 - `src/engine.rs` - fast game engine (~1M moves/s single-threaded on the laptop, late-game
   positions). The block order matches the reference emulator, so its move-index sequences
   replay directly.
-- `src/search.rs` - position evaluation and parallel beam search (rayon).
-- `src/bin/solve.rs` - the solver. `src/bin/replay.rs` replays and verifies a sequence.
+- `src/heuristic.rs` - faithful Rust port of Josh Holder's move-scoring heuristic
+  (`weighting.py`), checked weight-for-weight against his Python at all 4,590 record
+  positions. Also the rollout policies built on it (greedy, avoid-big, softmax-sampled).
+- `src/pipes.rs` - pipe-level structure (cluster values per 2-column pipe, "twins" count).
+- `src/bin/rbeam.rs` - **the current best solver**: beam search over the heuristic's top-k
+  moves, each child scored by how long a greedy rollout survives from it. Flags: `--width`,
+  `--k`, `--rollout` (cap), `--seed` (deterministic score noise, for several samples per
+  setting), `--policy greedy|avoidbig|both`, `--stoch N --temp T`, `--wtwin`, `--prefix FILE
+  --keep N`, `--out DIR`.
+- `src/bin/paranoid.rs` - port of his ParanoidPlay backtracking search (reproduces his log).
+- `src/bin/josh_play.rs` - greedy play with the heuristic; `--agree <seq>` reports how often
+  the greedy choice matches a sequence. `src/bin/josh_dump.rs` prints weights in the
+  reference's dump format for diffing. `src/bin/dbg_rollout.rs` / `dbg_policy.rs` are
+  diagnostics.
+- `src/search.rs` - session-1 position evaluation (passive look-ahead features) and the
+  parallel beam search used by `solve`; `rbeam` borrows its `survive` feature as a tie-break.
+- `src/bin/solve.rs` - the session-1 solver. `src/bin/replay.rs` replays and verifies a sequence.
   `src/bin/trace.rs` prints evaluation features along a game. `src/bin/bench.rs`
   measures speed and a random-play baseline.
 - `src/bin/sweep.rs` - compares evaluation configs (one per line of a file, see
@@ -64,8 +86,11 @@ Of the approaches considered, existing open-source code turned out to be the rig
   for thousands of positions. Diff its output between a normal build and a
   `--features reference` build (simple whole-board versions of the optimized steps); they
   must be identical.
-- `reference/` (git-ignored) - clone of josh-holder/SPLT, needed for the record sequences:
-  `git clone https://github.com/josh-holder/SPLT reference/josh-holder-SPLT`
+- `reference/` or `josh holder SPLT reference/` (both git-ignored) - clone of
+  josh-holder/SPLT, needed for the record sequences (`sequences/1208seq.txt` etc.):
+  `git clone https://github.com/josh-holder/SPLT reference/josh-holder-SPLT`. The desktop
+  has it at `josh holder SPLT reference/SPLT/`. His Python runs with `python -I` and is
+  the oracle for the heuristic port.
 - `sweeps/` - config lists for `sweep`.
 - `runs/best/` - best sequences found. A sequence is a list of block indices in the
   engine's block order. It's not yet human-friendly; see "Next steps".
@@ -76,11 +101,19 @@ Run these from the project folder. Requires Rust (`rustup`).
 
 ```
 cargo build --release
+cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 200 --seed 3
+cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 300 --prefix reference/josh-holder-SPLT/sequences/1208seq.txt --keep 700
+cargo run --release --bin replay -- runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt --final
+cargo run --release --bin paranoid -- --secs 60
+cargo run --release --bin josh_play -- --agree reference/josh-holder-SPLT/sequences/1053seq.txt
 cargo run --release --bin solve -- --width 800
-cargo run --release --bin replay -- runs/best/scratch_522.txt --final
-cargo run --release --bin solve -- --width 400 --prefix reference/josh-holder-SPLT/sequences/1208seq.txt --keep 1100
 cargo run --release --bin sweep -- sweeps/example.txt --width 200
 ```
+
+`rbeam` is deterministic for a given set of flags; `--seed N` (N > 0) adds tiny score noise
+so the same setting gives a different game. Results vary a lot between seeds (1440 to 1885
+at width 100 / k 4 / cap 200), so run several. On the Ryzen 5 7600 a width-100 run takes
+30-60 s; cost scales with width x k x rollout cap.
 
 `solve` flags: `--width` (beam width), and evaluation weights `--ws --wd --tau --wc --wi --wdebt
 --wslot --wmodel --mh --wback --wstuck --stuckt --alt`. See `Params::from_args` in
@@ -90,7 +123,18 @@ Speed on the laptop (i7-8565U, 4 cores): width 200 from scratch takes ~2-3 s, wi
 Most of the time goes into evaluating positions; see "Performance" in
 [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
 
-## What I learned about the search (2026-11-06)
+## What I learned about the search
+
+### Session 2: the evaluation was the problem, and rollouts fix it
+
+Josh Holder's heuristic is 98% of his record play (the greedy choice matches the record
+move at 98-99% of positions), but greedy alone is brittle: from arbitrary record positions
+it dies within ~100 moves. Scoring each beam child by **how long a greedy rollout survives
+from it** turned the 522-split beam into 1885 from scratch and 1984 from move 700 of the
+1208 game, at width 100. Details, the cap sweep and the failure analysis ("twins" in a
+pipe) are in [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
+
+### Session 1 (hand-built evaluation)
 
 1. **Beam width doesn't help yet.** Starting from the 1208 record game at move 900, beam
    widths from 50 to 4000 all die at 1035-1077. The record went on to 1208. Starting at
@@ -121,15 +165,14 @@ to the record's.
 The full story of what was tried, what failed, and why is in
 [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
 
-- **Tune the evaluation from expert play**: fit the weights so that, at each position of the
-  record games, the record's move scores higher than its siblings (conditional-logit /
-  learning-to-rank, like tuning a chess evaluation from master games). Benchmark: extend
-  record positions from moves 500/700/900.
-- **Port Josh Holder's tactical heuristics** (`weighting.py`, "does this cluster gain a new
-  halving") as move ordering or evaluation terms, or use his ParanoidPlay backtracking on top
-  of the fast engine. His approach reached 1196 in pure-algorithm mode.
-- **Learned value function on the desktop GPUs**: once there's a decent search, self-play data
-  plus a small CNN over the 8×16 grid could replace the hand-written evaluation.
 - **Human-friendly replay tool**: an HTML page that shows the board and highlights the next
-  block to tap, so a sequence can be followed on the phone or the Steam version for a record
-  attempt.
+  block to tap, so a sequence can be followed on the phone or the Steam version. This is
+  now the blocker for a real record attempt.
+- **More compute on `rbeam`**: wider beams and many seeds at cap 200; endgame re-search of
+  the best game (`--prefix ... --keep N`).
+- **Better rollout policy**: the greedy rollouts die by stacking "twin" clusters in a pipe.
+  A policy that refuses to place a cluster on a pipe whose top cluster has not been halved
+  yet, or heuristic constants re-tuned for the late game (values above 1200 are outside what
+  the heuristic was tuned on), should make rollouts more informative.
+- **Learned evaluation on the desktop GPUs**: the beam now produces thousands of strong
+  games cheaply, which is the training data a small CNN value/policy net needs.

@@ -12,7 +12,14 @@
 //! own frontier.
 use rayon::prelude::*;
 use splt::engine::{parse_moves, Board};
-use splt::heuristic::{best_move, weights};
+use splt::heuristic::{choose, choose_stochastic, play_out, play_out_stochastic, weights, Policy};
+
+/// How a rollout was played, so the best one can be replayed exactly at the end.
+#[derive(Clone, Copy, Debug)]
+enum Kind {
+    Det(Policy),
+    Stoch(u64),
+}
 use splt::search::{features, Params};
 use std::time::Instant;
 
@@ -20,19 +27,46 @@ fn arg<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok())
 }
 
-/// Greedy rollout. Returns (moves played, game over?, final board).
-fn rollout(start: &Board, cap: usize) -> (usize, bool, Board) {
-    let mut b = start.clone();
-    let mut n = 0usize;
-    loop {
-        if cap > 0 && n >= cap {
-            return (n, false, b);
+/// Rollout with each of the given policies plus `stoch` seeded stochastic play-outs; the
+/// longest one counts. Returns (moves played, game over?, final board, kind).
+fn rollout(start: &Board, cap: usize, pols: &[Policy], stoch: usize, temp: f64, seed0: u64) -> (usize, bool, Board, Kind) {
+    let mut best: Option<(usize, bool, Board, Kind)> = None;
+    for &pol in pols {
+        let mut b = start.clone();
+        let (n, over) = play_out(&mut b, pol, cap);
+        if best.as_ref().is_none_or(|x| n > x.0) {
+            best = Some((n, over, b, Kind::Det(pol)));
         }
-        let ws = weights(&b);
-        let Some(m) = best_move(&ws) else { return (n, true, b) };
-        b.play(m).unwrap();
-        n += 1;
     }
+    for j in 0..stoch {
+        let s = seed0.wrapping_add(j as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0xD1B54A32D192ED03;
+        let mut b = start.clone();
+        let (n, over) = play_out_stochastic(&mut b, temp, s, cap);
+        if best.as_ref().is_none_or(|x| n > x.0) {
+            best = Some((n, over, b, Kind::Stoch(s)));
+        }
+    }
+    best.unwrap()
+}
+
+fn replay_kind(b: &mut Board, kind: Kind, temp: f64) -> Vec<u8> {
+    let mut out = Vec::new();
+    match kind {
+        Kind::Det(pol) => {
+            while let Some(m) = choose(b, pol) {
+                b.play(m).unwrap();
+                out.push(m as u8);
+            }
+        }
+        Kind::Stoch(seed) => {
+            let mut rng = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+            while let Some(m) = choose_stochastic(b, temp, &mut rng) {
+                b.play(m).unwrap();
+                out.push(m as u8);
+            }
+        }
+    }
+    out
 }
 
 fn top_k_moves(b: &Board, k: usize) -> Vec<u8> {
@@ -51,6 +85,21 @@ fn main() {
     let k: usize = arg(&args, "--k").unwrap_or(4);
     let cap: usize = arg(&args, "--rollout").unwrap_or(300);
     let tie: f32 = arg(&args, "--tie").unwrap_or(0.01);
+    // Deterministic per-child score noise, to sample several games per configuration.
+    let seed: u64 = arg(&args, "--seed").unwrap_or(0);
+    let noise: f32 = arg(&args, "--noise").unwrap_or(if seed == 0 { 0.0 } else { 0.5 });
+    // Extra stochastic (softmax-sampled) rollouts per child; the longest rollout counts.
+    let stoch: usize = arg(&args, "--stoch").unwrap_or(0);
+    let temp: f64 = arg(&args, "--temp").unwrap_or(3.0);
+    // Static penalty per "twin" cluster pair in the child position (see pipes::twins).
+    let wtwin: f32 = arg(&args, "--wtwin").unwrap_or(0.0);
+    let twin_ratio: f64 = arg(&args, "--twinratio").unwrap_or(1.5);
+    // --policy greedy | avoidbig | both   (both = the longer of the two rollouts)
+    let pol_name: String = arg(&args, "--policy").unwrap_or_else(|| "greedy".to_string());
+    let pols: Vec<Policy> = match pol_name.as_str() {
+        "both" => vec![Policy::Greedy, Policy::AvoidBig],
+        s => vec![s.parse().expect("policy")],
+    };
     let out: String = arg(&args, "--out").unwrap_or_else(|| "runs".to_string());
     let quiet = args.iter().any(|a| a == "--quiet");
     let p = Params::default();
@@ -66,7 +115,7 @@ fn main() {
         start.play(m as usize).expect("prefix contains an illegal move");
     }
     if !quiet {
-        eprintln!("rbeam width {width} k {k} rollout {cap} tie {tie}, starting at split {}", start.moves);
+        eprintln!("rbeam width {width} k {k} rollout {cap} tie {tie} policy {pol_name} stoch {stoch} temp {temp} seed {seed}, starting at split {}", start.moves);
     }
     let t0 = Instant::now();
 
@@ -75,9 +124,10 @@ fn main() {
     }
     let mut history: Vec<Vec<(u32, u8)>> = Vec::new();
     let mut frontier = vec![Node { board: start.clone() }];
-    // Best complete game: (splits, level of the node the rollout started from, node index).
-    // Level L node = position after L moves past the start; its rollout is recomputed later.
-    let mut best: (u16, usize, u32) = (start.moves, 0, 0);
+    // Best complete game: (splits, level of the node the rollout started from, node index,
+    // policy). Level L node = position after L moves past the start; its rollout is
+    // recomputed at the end (rollouts are deterministic).
+    let mut best: (u16, usize, u32, Kind) = (start.moves, 0, 0, Kind::Det(Policy::Greedy));
     let mut rollouts: u64 = 0;
 
     loop {
@@ -100,20 +150,31 @@ fn main() {
         }
         children.par_sort_unstable_by_key(|c| c.2);
         children.dedup_by_key(|c| c.2);
-        let scored: Vec<(u32, u8, f32, u16, bool, Board)> = children
+        let scored: Vec<(u32, u8, f32, u16, bool, Board, Kind)> = children
             .into_par_iter()
             .map(|(pi, m, _, c)| {
                 if c.is_over() {
-                    return (pi, m, f32::NEG_INFINITY, c.moves, true, c);
+                    return (pi, m, f32::NEG_INFINITY, c.moves, true, c, Kind::Det(Policy::Greedy));
                 }
-                let (n, over, end) = rollout(&c, cap);
+                let seed0 = seed ^ (level as u64) << 40 ^ (pi as u64) << 8 ^ m as u64;
+                let (n, over, end, pol) = rollout(&c, cap, &pols, stoch, temp, seed0);
                 let reached = c.moves + n as u16;
                 let mut s = n as f32;
                 if !over {
                     // Tie-break among rollouts that hit the cap by the end state's short-term health.
                     s += tie * features(&end, &p).survive;
                 }
-                (pi, m, s, reached, over, c)
+                if wtwin != 0.0 {
+                    s -= wtwin * splt::pipes::twins(&c, twin_ratio, 20) as f32;
+                }
+                if noise > 0.0 {
+                    let mut z = seed ^ (level as u64) << 40 ^ (pi as u64) << 8 ^ m as u64;
+                    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+                    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+                    z ^= z >> 31;
+                    s += noise * (z >> 40) as f32 / (1u64 << 24) as f32;
+                }
+                (pi, m, s, reached, over, c, pol)
             })
             .collect();
         rollouts += scored.len() as u64;
@@ -126,10 +187,10 @@ fn main() {
             }
         }
         if let Some(f) = forced {
-            best = (scored[f].3, level + 1, 0); // index fixed below
+            best = (scored[f].3, level + 1, 0, scored[f].6); // index fixed below
         }
         let mut live: Vec<(u32, u8, f32, Board)> = Vec::with_capacity(scored.len());
-        for (j, (pi, m, s, _reached, _over, c)) in scored.into_iter().enumerate() {
+        for (j, (pi, m, s, _reached, _over, c, _)) in scored.into_iter().enumerate() {
             if Some(j) == forced {
                 live.push((pi, m, f32::INFINITY, c));
             } else if !c.is_over() {
@@ -165,7 +226,7 @@ fn main() {
     }
 
     // Reconstruct: path to the best node, then replay its greedy rollout.
-    let (splits, blevel, mut idx) = best;
+    let (splits, blevel, mut idx, bpol) = best;
     let mut rev = Vec::new();
     for l in (0..blevel).rev() {
         let (pi, m) = history[l][idx as usize];
@@ -178,21 +239,16 @@ fn main() {
     for &m in &moves {
         b.play(m as usize).expect("illegal move in reconstructed path");
     }
-    loop {
-        let ws = weights(&b);
-        let Some(m) = best_move(&ws) else { break };
-        b.play(m).unwrap();
-        moves.push(m as u8);
-    }
+    moves.extend(replay_kind(&mut b, bpol, temp));
     assert!(b.is_over(), "reconstructed game not over");
     assert_eq!(b.moves, splits, "reconstructed game length mismatch");
     let secs = t0.elapsed().as_secs_f64();
     std::fs::create_dir_all(&out).ok();
-    let path = format!("{out}/rbeam_{}_w{width}_k{k}_r{cap}.txt", b.moves);
+    let path = format!("{out}/rbeam_{}_w{width}_k{k}_r{cap}_{pol_name}_st{stoch}_s{seed}.txt", b.moves);
     let body: Vec<String> = moves.iter().map(|m| m.to_string()).collect();
     std::fs::write(&path, format!("[{}]\n", body.join(", "))).unwrap();
     println!(
-        "RESULT splits={} start={} width={width} k={k} rollout={cap} tie={tie} rollouts={rollouts} time={secs:.1}s -> {path}",
+        "RESULT splits={} start={} width={width} k={k} rollout={cap} tie={tie} policy={pol_name} stoch={stoch} temp={temp} wtwin={wtwin} seed={seed} noise={noise} rollouts={rollouts} time={secs:.1}s -> {path}",
         b.moves, start.moves
     );
 }
