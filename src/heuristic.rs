@@ -181,7 +181,63 @@ pub fn weights(b: &Board) -> Vec<f64> {
     weights_from(b, &a)
 }
 
+/// Scale factors on the heuristic's terms, for tuning. `HParams::default()` reproduces
+/// Josh Holder's weights exactly (every factor 1, except `lowest`, which is the original
+/// 0.5 discount for splitting above the lowest free row of a pipe after move 300).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HParams {
+    pub s: [f64; NP],
+}
+
+pub const NP: usize = 14;
+pub const PNAMES: [&str; NP] = [
+    "imbalance", "aspect", "pb_cluster", "pb_free", "lowest", "nexthigh", "height_cluster", "height_free", "size",
+    "midrow", "midcol", "wide_h", "wide_v", "triple",
+];
+
+impl Default for HParams {
+    fn default() -> Self {
+        let mut s = [1.0; NP];
+        s[4] = 0.5;
+        HParams { s }
+    }
+}
+
+impl HParams {
+    /// Parse "name=value,name=value" or a file containing that (unnamed factors keep defaults).
+    pub fn parse(text: &str) -> HParams {
+        let mut p = HParams::default();
+        for part in text.split(|c: char| c == ',' || c.is_whitespace()).filter(|x| !x.is_empty()) {
+            let (k, v) = part.split_once('=').expect("expected name=value");
+            let i = PNAMES.iter().position(|n| *n == k).unwrap_or_else(|| panic!("unknown heuristic factor {k}"));
+            p.s[i] = v.parse().expect("bad number");
+        }
+        p
+    }
+    pub fn describe(&self) -> String {
+        PNAMES.iter().zip(self.s.iter()).map(|(n, v)| format!("{n}={v:.4}")).collect::<Vec<_>>().join(",")
+    }
+}
+
+static GLOBAL: std::sync::OnceLock<HParams> = std::sync::OnceLock::new();
+
+/// Set the factors used by `weights`, `weights_from`, `choose` and the play-outs (once, at
+/// startup). Without a call, the defaults (Josh Holder's original) apply.
+pub fn set_global(p: HParams) {
+    GLOBAL.set(p).expect("heuristic parameters already set");
+}
+
+#[inline]
+pub fn global() -> HParams {
+    GLOBAL.get().copied().unwrap_or_default()
+}
+
 pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
+    weights_with(b, a, &global())
+}
+
+pub fn weights_with(b: &Board, a: &Analysis, hp: &HParams) -> Vec<f64> {
+    let k = &hp.s;
     let n = b.len as usize;
     let blocks = b.blocks();
     let horiz = b.horizontal_next();
@@ -220,7 +276,7 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
                 if about_to_lose {
                     wta *= 100.0;
                 }
-                weight += wta;
+                weight += k[0] * wta;
             }
         } else if !create {
             let hadd = h - 1.0;
@@ -233,7 +289,7 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
                 wta = -12.5 * pct * pct + 27.5 * pct;
                 wta *= 4.0 * imb.abs() / total_splits;
             }
-            weight += wta;
+            weight += k[0] * wta;
         }
 
         // ---- aspect ratio -------------------------------------------------------------
@@ -250,7 +306,7 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
                 }
             }
         }
-        weight += wta;
+        weight += k[1] * wta;
 
         // ---- point block weight ---------------------------------------------------------
         let mut wta = 0.0;
@@ -284,16 +340,16 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
             if curr_i > 300 {
                 let (box_row, box_col) = (bl.y as i32 / 2, bl.x as usize / 2);
                 if box_row < a.lowest_in_col[box_col] {
-                    wta *= 0.5;
+                    wta *= k[4];
                 }
             }
         }
-        weight += wta;
+        weight += (if create { k[2] } else { k[3] }) * wta;
 
         // ---- next highest in column -------------------------------------------------
         if a.below[i].len != 0 && curr_i > 800 {
             let pct = (curr - a.below[i].last().unwrap() as f64) / curr;
-            weight += 9.0 * pct;
+            weight += k[5] * (9.0 * pct);
         }
 
         // ---- height -------------------------------------------------------------------
@@ -308,9 +364,9 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
                     max_height = cand;
                 }
             }
-            20.0 * (max_height / board_h).powi(2)
+            k[6] * (20.0 * (max_height / board_h).powi(2))
         } else {
-            10.0 * ((bl.y + bl.h) as f64 / board_h).powi(2)
+            k[7] * (10.0 * ((bl.y + bl.h) as f64 / board_h).powi(2))
         };
         weight += wta;
 
@@ -318,7 +374,7 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
         if create {
             let cluster_squares = (w * h) / 2.0 * mask.count_ones() as f64;
             if cluster_squares > 4.0 {
-                weight += -60.0 * (cluster_squares / total_splits) * (curr / 200.0);
+                weight += k[8] * (-60.0 * (cluster_squares / total_splits) * (curr / 200.0));
             }
         }
 
@@ -345,10 +401,10 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
                 (max_y + bl.h as i32, max_x + bl.w as i32 / 2)
             };
             if bottom % 2 != 0 || top % 2 != 0 {
-                wta -= 50.0;
+                wta -= k[9] * 50.0;
             }
             if right % 2 != 0 || left % 2 != 0 {
-                wta -= 50.0;
+                wta -= k[10] * 50.0;
             }
         }
         weight += wta;
@@ -356,10 +412,10 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
         // ---- wide blocks ----------------------------------------------------------------
         if horiz {
             if bl.h > 2 && bl.w > 2 {
-                weight += -5.0;
+                weight += k[11] * -5.0;
             }
         } else if bl.w > 2 {
-            weight += 5.0;
+            weight += k[12] * 5.0;
         }
 
         // ---- forced triple edge case ------------------------------------------------
@@ -375,7 +431,7 @@ pub fn weights_from(b: &Board, a: &Analysis) -> Vec<f64> {
                 }
             }
             if upright && small {
-                weight += -1.0;
+                weight += k[13] * -1.0;
             }
         }
 
@@ -473,6 +529,22 @@ pub fn choose(b: &Board, pol: Policy) -> Option<usize> {
             }
             best.or(fallback).map(|(i, _)| i)
         }
+    }
+}
+
+/// Greedy play-out with explicit heuristic factors (for tuning; ignores the global ones).
+/// Returns (moves played, game over?).
+pub fn play_out_with(b: &mut Board, hp: &HParams, cap: usize) -> (usize, bool) {
+    let mut n = 0usize;
+    loop {
+        if cap > 0 && n >= cap {
+            return (n, false);
+        }
+        let a = analyse(b);
+        let ws = weights_with(b, &a, hp);
+        let Some(m) = best_move(&ws) else { return (n, true) };
+        b.play(m).unwrap();
+        n += 1;
     }
 }
 
