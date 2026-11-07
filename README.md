@@ -4,7 +4,7 @@ An attempt to find very long games of Simogo's *SPL-T* (2015). The score is the 
 splits made before no split is possible. Goal: understand what optimal play looks like and,
 ideally, beat the world record.
 
-## Status (2026-11-06, session 3)
+## Status (2026-11-07, session 4)
 
 | | splits |
 |---|---|
@@ -15,7 +15,7 @@ ideally, beat the world record.
 | Best score posted publicly: ryederek on Bluesky, March 2026 (Legacy Collection) | 1910 |
 | Rollout beam, from scratch (`rbeam`, width 100, k 4, cap 200, seed 3, ~40 s on the desktop) | 1885 (`runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt`) |
 | Rollout beam, from scratch, two stochastic rollouts per child (width 100, k 4, cap 200, `--stoch 2`, seed 1, ~100 s) | 2064 (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`) |
-| **Ratchet** (re-search the best game's tail with fresh seeds; session 3, overnight runs in progress) | **2277+** (see `docs/RESEARCH_LOG.md`, "Resume here") |
+| **Ratchet** from the 2064 game (re-search the best games' tails with fresh seeds and varied settings; one night on the desktop) | **2620** (`runs/best/ratchet_2620.txt`; hand-replay data `runs/best/ratchet_2620.json`) |
 | Rollout beam resuming Josh Holder's 1208 game at move 700 | 1984 (`runs/best/from_josh1208_at700_1984_rbeam_w100_k4_r300.txt`) |
 
 The engine replays all four published record games move for move, and every sequence in

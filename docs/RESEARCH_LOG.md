@@ -23,6 +23,9 @@ worked, what didn't, and what I'd do next. Read [README.md](../README.md) and
   before that the record was 1277 (Jonathon Becker / @mangosquash, by hand, 2022). Nothing
   from this solver has been played on the real game yet; `tools/replay.html` exists for
   that.
+- **Best game: 2620** (session 3, overnight). The ratchet re-searches the tail of the best
+  games with fresh seeds and a different beam setting each time; it took the 2064 game to 2620
+  in one night (see "Overnight results" under session 3).
 - **The bottleneck was the evaluation function, not compute.** Session 1 proved it (beam
   widths 50-4000 from move 900 of the 1208 game all died at 1035-1077); session 2 fixed it.
 
@@ -183,25 +186,25 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   children) far better than the engine itself. The engine is branchy, with irregular
   per-board loops.
 
-## Resume here (session 3, 2026-11-06 night: overnight runs in progress)
+## Resume here (session 4, 2026-11-07 afternoon: more ratchet runs in progress)
 
-- **Overnight queue** (detached workers; they survive the Claude session): see
-  `python -I tools/queue/summary.py` for every result and ratchet line, and
-  `runs/queue/workers.log` for what each worker is doing. Worker B runs the second ratchet
-  leg (`runs/ratchet/r2064b`, until ~04:00); worker A runs the pool ratchet
-  (`runs/ratchet/pool`, ~9.5 h) after the last experiments. `touch runs/queue/STOP` makes
-  both workers exit after their current job. The PC must not sleep.
-- **Best game when the night started: 2277** (`runs/exp/ratchet_smoke/best_2277.txt`,
-  copied to `runs/bin/start_2277.txt`). The longest game anywhere is whatever
-  `python -I tools/analysis/build_data.py` reports as "featured"; that also rebuilds the
-  page data. Then: `replay` it, copy it to `runs/best/`, export it for the hand-replay
-  page (`export_game`), republish `tools/viz/index.html` with `data.js` (artifact
-  https://claude.ai/artifact/TFs2adq7eKa8naU47FX2Ag), fill `[FINAL BEST]` in the blog
-  draft, and update README/TL;DR.
+- **Best verified game: 2620** (`runs/best/ratchet_2620.txt`, found by the overnight pool
+  ratchet as `runs/ratchet/pool/best_2620.txt`; hand-replay data
+  `runs/best/ratchet_2620.json`). The page (artifact
+  https://claude.ai/artifact/TFs2adq7eKa8naU47FX2Ag, version 4) and the blog draft show it.
+- **Running** (queue workers, detached): `60-v5.jobs` started 12:32. Worker A runs
+  `runs/ratchet/v5_pool` (10 h) and worker B runs `runs/ratchet/v5_deep` (4 h), then
+  `70-v5-night.jobs` (`runs/ratchet/v5_night`, 10 h). `python -I tools/queue/summary.py`
+  shows progress; `touch runs/queue/STOP` stops the workers after their current job.
+- **When they finish**: `bash tools/queue/finalize.sh` verifies the longest game anywhere,
+  copies it to `runs/best/`, exports the replay JSON and rebuilds `tools/viz/data.js`. Then
+  add the new run names to `RLAB` / `RCOL` in `tools/viz/index.html` (unlabelled ratchet
+  runs are hidden), republish the page, and update the numbers in the blog draft (its
+  header comment lists every place) and in the README status table.
 - Public best to beat: 1910 (ryederek, Bluesky, 2026-03-20).
-- Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true;
-  fact-checked against Josh Holder's write-up in session 3). Video plan: Asana card
-  "SPL-T world-record video" on the Posts, Essays, and Videos board.
+- Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true, purely
+  technical; Jackson approved it on 2026-11-07). Video plan: Asana card "SPL-T world-record
+  video" on the Posts, Essays, and Videos board.
 
 ## Session 3 (2026-11-06 evening, desktop, Claude Opus 5.5): the ratchet
 
@@ -238,6 +241,51 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
 - **Seeds from scratch, more samples**: width 100 / k 4 / cap 200 over ten seeds is
   1062-1808, mean 1413, sd 236. The session-2 values 1440 / 1855 / 1885 were lucky draws.
   So the seed lottery alone will not reach the high 2000s; the ratchet is needed.
+
+### Overnight results (2026-11-06 18:00 to 2026-11-07 08:20)
+
+- **Pool ratchet: 2277 to 2620 in 9.5 hours** (`runs/ratchet/pool`, 4,833 attempts, 34
+  new bests). The single-game, single-setting ratchet (`r2064b`, width 100, cap 200, no
+  stochastic rollouts, ties accepted) went from 2248 to 2332 in 10 hours and 9,919
+  attempts. The pool version gained four times as much in less time.
+- **Varying the search is what helped.** Inside the pool run, the r2064b setting (w100 cap
+  200 stoch 0) produced no gain over its parent in 553 attempts. Attempts with two
+  stochastic rollouts were a third of all attempts but produced 24 of the 34 new bests;
+  per hour of search, w100 with stoch 2 and cap 200 or 250 gained most often (about 23 gains
+  per hour, against 0-10 for stoch 0).
+- **Cut depth** (gains over the parent, pool run): 75 in 1,188 attempts cutting 120-179
+  back, 12 / 908 at 180-239, 5 / 660 at 240-299, 3 / 533 at 300-359, and 0 / 1,544 at 360
+  or more. New bests came from cuts up to 356 back; the two biggest jumps were 2439 to
+  2506 (246 back, width 300, cap 250, stoch 2) and 2524 to 2569 (181 back, width 200,
+  stoch 2).
+- **Then a plateau.** Nothing beat 2620 in the pool run's last 1.6 hours, nor in two more
+  4-hour pool ratchets started from it (`morning_a`, `morning_b`, 3,816 attempts). By then
+  all eight pool slots held 2620-move games that differed only in their last few dozen
+  moves, so every attempt started from the same prefix. Session 4's `--diverse` fixes that.
+- **Lineage.** The 2620 game shares its first 1,629 moves with the 2064 game: the ratchet
+  rewrote the last 435 moves into 991. The 2248 and 2277 games share 1,932 moves with it,
+  and 2439 shares 2,193.
+- **The 2620 game** plays the heuristic's first choice at 59.7% of its moves (2064: 60.9%).
+  Capacity accounting: 127 + 2,659 from refills - 164 lost to clusters - 2 left over.
+- **Beam variants from scratch** (all w100 k4): cap 200, n=40, mean 1513, sd 234, range
+  1062-2035; cap 200 with stoch 2, n=20, mean 1612, best 2073; cap 300, n=6, mean 1746,
+  range 1490-1976 (the only variant clearly above the baseline, by about 2.5 standard
+  errors); noise 0.05, n=6, mean 1447, range 927-2053.
+
+## Session 4 (2026-11-07, desktop, Claude Opus 5.5): breaking the 2620 plateau
+
+- **`ratchet --diverse D`** (v5, snapshot `runs/bin/ratchet_v5.exe`): a result that agrees
+  with a pool member up to within D moves of the shorter game's end is in that member's
+  family. It replaces the member only if it is longer and is otherwise dropped, so the pool
+  holds up to N different families instead of N near-copies. Smoke test from the pool
+  run's ten best files: after 8 attempts the pool held 2620, 2614, 2611, 2611, 2610, 2604,
+  2599, 2594.
+- **Runs queued** (`runs/queue/jobs/60-v5.jobs`, `70-v5-night.jobs`):
+  - `v5_pool`: pool 8, diverse 100, slack 40, widths 100/200/300/500, caps 150/250, stochs
+    2/2/0/4, cuts 120-400 back, 10 h.
+  - `v5_deep`: does a much stronger search rebuild a long tail better? Pool 4, diverse 100,
+    slack 60, widths 500/1000, caps 200/400, stoch 2, cuts 200-900 back, 4 h.
+  - `v5_night`: like `v5_pool`, seeded with every best file from every ratchet run, 10 h.
 - **Beam variants** (from scratch, small samples, all within noise of the baseline):
   `--maxkids 2` 1092-1761 (mean 1507, n=6); `--rankpen 0.3` 1220 / 1846; width 200 with
   `--maxkids 2` 1191 / 1942. Cap 300 and near-noiseless tie-breaks were still running.

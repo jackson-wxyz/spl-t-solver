@@ -185,7 +185,7 @@ td:first-child, th:first-child { text-align: left; }
 <section id="s-ratchet">
   <div class="sec-head">
     <h2>The ratchet: re-searching the tail of the best game</h2>
-    <p>Because single runs vary so much, the long games come from a second search layered on top. The ratchet takes the best game so far, cuts it some number of moves before the end, runs a fresh beam from there with a new seed, and keeps the result only if it is at least as long. Short cuts polish the ending; long cuts give the search room to find a different line, but they are expensive and rarely pay.</p>
+    <p>Because single runs vary so much, the long games come from a second search layered on top. The ratchet takes the best game so far, cuts it some number of moves before the end, runs a fresh beam from there with a new seed, and keeps the result only if it is at least as long. Cuts less than about 120 moves from the end never change the length; cuts 120 to 400 back produce the gains; deeper cuts cost the most and never paid off. The version that keeps a pool of the eight longest games, and draws each attempt's width, rollout length and number of randomized rollouts at random, gained four times as much overnight as the single-game, single-setting version (2,277 &rarr; 2,620 against 2,248 &rarr; 2,332).</p>
   </div>
   <figure>
     <h3>Best game so far, and every attempt, by hours of search</h3>
@@ -488,14 +488,16 @@ td:first-child, th:first-child { text-align: left; }
   for (const p of phases) { const d = document.createElement('div'); d.className = 'phase'; const n = document.createElement('div'); n.className = 'n'; n.textContent = p.n; const b = document.createElement('div'); const h = document.createElement('h3'); h.textContent = p.t; const t = document.createElement('p'); t.textContent = p.d; b.append(h, t); d.append(n, b); ph.appendChild(d); }
 
   // ---------- ratchet ----------
-  const RLAB = { r2064a: 'first leg', r2064b: 'second leg: shorter cuts, ties accepted', pool: 'pool of eight games, varied settings' };
-  const RCOL = ['--accent', '--accent-2', '--series-3'];
-  const RT = DATA.ratchets || [];
+  // Only finished, labelled ratchet runs are drawn; runs still in progress are left out until labelled here.
+  const RLAB = { r2064a: 'first leg', r2064b: 'second leg: one game, one setting', pool: 'pool of eight games, varied settings', morning_a: 'two more pools from 2,620 (4 h each, no gain)', morning_b: '' };
+  const RCOL = { r2064a: '--accent', r2064b: '--accent-2', pool: '--series-3', morning_a: '--gray', morning_b: '--gray' };
+  const RORD = Object.keys(RLAB);
+  const RT = (DATA.ratchets || []).filter(r => r.name in RLAB).sort((a, b) => RORD.indexOf(a.name) - RORD.indexOf(b.name));
   function ratchetSeries() {
     return RT.map((r, i) => {
       let best = r.iters.length ? r.iters[0][3] : 0; const steps = [];
       for (const [it, back, res, bestBefore, h] of r.iters) { best = Math.max(bestBefore, best); steps.push([h, best]); if (res > best) { best = res; steps.push([h, best]); } }
-      return { name: r.name, label: RLAB[r.name] || r.name, color: css(RCOL[i % RCOL.length]), iters: r.iters, steps };
+      return { name: r.name, label: RLAB[r.name], color: css(RCOL[r.name] || '--gray'), iters: r.iters, steps };
     });
   }
   function drawRatchet() {
@@ -521,6 +523,7 @@ td:first-child, th:first-child { text-align: left; }
       let d = ''; s.steps.forEach(([h, b], i) => { d += (i ? 'H' + sx(h).toFixed(1) + 'V' : 'M' + sx(h).toFixed(1) + ',') + sy(b).toFixed(1); });
       const last = s.iters[s.iters.length - 1]; d += 'H' + sx(last[4]).toFixed(1);
       el('path', { d, class: 'ln', stroke: s.color }, svg);
+      if (!s.label) return;
       const k = document.createElement('span'); k.className = 'key'; const i2 = document.createElement('i'); i2.style.background = s.color; k.append(i2, document.createTextNode(s.label + ' (' + fmt(s.iters.length) + ' attempts)')); lg.appendChild(k);
     });
     const hit = el('rect', { x: L, y: T, width: W - L - R, height: H - T - B, fill: 'transparent' }, svg);

@@ -17,6 +17,12 @@
 //! (or, with N = 1, strictly longer than the best; with --plateau also equally long).
 //! Every new best is written to DIR/best_<splits>.txt and DIR/best.txt. Prints one RATCHET
 //! line per iteration (to DIR/ratchet.log) and a NEWBEST line per improvement.
+//!
+//! --diverse D (v5): a result whose moves agree with a pool member up to within D moves of
+//! the shorter game's end belongs to that member's family; it replaces the member only if
+//! longer and otherwise is dropped. Without it, the overnight pool of 8 filled with eight
+//! 2620-move games that differed only in their last few dozen moves, so every attempt
+//! started from the same prefix.
 use splt::engine::parse_moves;
 use splt::rollout_beam::{arg, run, verify, write_sequence, Config};
 use std::io::Write;
@@ -42,6 +48,18 @@ fn main() {
     let plateau = args.iter().any(|a| a == "--plateau");
     let pool_n: usize = arg(&args, "--pool").unwrap_or(1).max(1);
     let slack: usize = arg(&args, "--slack").unwrap_or(0);
+    let diverse: usize = arg(&args, "--diverse").unwrap_or(0);
+    // Index of the pool member whose family `mv` belongs to (identical moves when D = 0).
+    let family = |pool: &Vec<(usize, Vec<u8>)>, mv: &[u8]| -> Option<usize> {
+        pool.iter().position(|(_, m)| {
+            if diverse == 0 {
+                m.as_slice() == mv
+            } else {
+                let cp = m.iter().zip(mv).take_while(|(a, b)| a == b).count();
+                cp + diverse >= m.len().min(mv.len())
+            }
+        })
+    };
     let base = Config::from_args(&args);
     let widths: Vec<usize> = list(&args, "--widths").unwrap_or_else(|| vec![base.width]);
     let caps: Vec<usize> = list(&args, "--caps").unwrap_or_else(|| vec![base.cap]);
@@ -53,8 +71,10 @@ fn main() {
     for p in start_paths.split(',') {
         let mv: Vec<u8> = parse_moves(&std::fs::read_to_string(p).expect("read start")).iter().map(|&m| m as u8).collect();
         let n = verify(&mv).unwrap_or_else(|| panic!("{p} is not a legal finished game")) as usize;
-        if !pool.iter().any(|(_, m)| *m == mv) {
-            pool.push((n, mv));
+        match family(&pool, &mv) {
+            Some(fi) if pool[fi].0 < n => pool[fi] = (n, mv),
+            Some(_) => {}
+            None => pool.push((n, mv)),
         }
     }
     pool.sort_by(|a, b| b.0.cmp(&a.0));
@@ -64,8 +84,9 @@ fn main() {
     let mut log = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/ratchet.log")).unwrap();
     writeln!(
         log,
-        "# start {start_paths} ({best_len} splits) at {} pool={pool_n} slack={slack} widths={widths:?} caps={caps:?} stochs={stochs:?} back={min_back}..{max_back} plateau={plateau}, {}",
+        "# start {start_paths} ({best_len} splits) at {} pool={pool_n} slack={slack} diverse={diverse} pool_lens={:?} widths={widths:?} caps={caps:?} stochs={stochs:?} back={min_back}..{max_back} plateau={plateau}, {}",
         now(),
+        pool.iter().map(|p| p.0).collect::<Vec<_>>(),
         base.describe()
     )
     .unwrap();
@@ -112,15 +133,24 @@ fn main() {
         );
         writeln!(log, "{line}").unwrap();
         log.flush().ok();
-        let distinct = !pool.iter().any(|(_, m)| *m == o.moves);
-        let accept = distinct
-            && if pool_n == 1 { res > best_len || (plateau && res == best_len) } else { pool.len() < pool_n || res >= pool[pool.len() - 1].0 };
+        let fam = if pool_n == 1 { None } else { family(&pool, &o.moves) };
+        let accept = if pool_n == 1 {
+            pool[0].1 != o.moves && (res > best_len || (plateau && res == best_len))
+        } else {
+            match fam {
+                Some(fi) => res > pool[fi].0,
+                None => pool.len() < pool_n || res >= pool[pool.len() - 1].0,
+            }
+        };
         if accept {
             assert_eq!(verify(&o.moves), Some(o.splits), "ratchet result failed verification");
             if pool_n == 1 {
                 pool[0] = (res, o.moves);
             } else {
-                pool.push((res, o.moves));
+                match fam {
+                    Some(fi) => pool[fi] = (res, o.moves),
+                    None => pool.push((res, o.moves)),
+                }
                 pool.sort_by(|a, b| b.0.cmp(&a.0));
                 pool.truncate(pool_n);
             }
