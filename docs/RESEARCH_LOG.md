@@ -11,8 +11,8 @@ worked, what didn't, and what I'd do next. Read [README.md](../README.md) and
 - **The rules are solved.** `src/engine.rs` is a Rust port of the Python emulator from
   [josh-holder/SPLT](https://github.com/josh-holder/SPLT). It replays all four published
   record sequences (1053, 1133, 1196, 1208 splits) exactly, and each game ends on exactly
-  its last move. The 1133 sequence was played by hand on a real iPhone as the 2022 world
-  record. So treat the engine as ground truth, quirks included. It runs at about 1.3M
+  its last move. Josh Holder took the world record with 1196 (his write-up), so his
+  emulator's sequences were played on the real game. So treat the engine as ground truth, quirks included. It runs at about 1.3M
   moves/s on one laptop thread.
 - **Session 1's search was not the answer; session 2's is.** Beam search with hand-built
   evaluations reached 522 from scratch. Session 2 (below, "Session 2") replaced the
@@ -57,7 +57,8 @@ that explodes beneath them, halving them over and over.
    surfaced Josh Holder's blog post, which led to `josh-holder/SPLT` (the Python emulator,
    derived from Craig Polley's flashingleds.net one, plus record sequences) and
    `josh-holder/nn_split` (his abandoned AlphaZero attempt). His blog explains the strategy
-   and says the 1133 record was set by replaying the computed sequence on a phone.
+   and says he took the world record with 1196 (1208 with human assistance). (Earlier
+   versions of this log said 1133 was played on a phone; the blog does not say that.)
 5. **Running his Python directly was blocked**: the sandbox's auto-mode classifier refuses
    to execute downloaded code. The workaround turned out better: port the rules to Rust,
    then validate by replaying his sequences. Each sequence is a list of indices into the
@@ -182,27 +183,72 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   children) far better than the engine itself. The engine is branchy, with irregular
   per-board loops.
 
-## Resume here (end of session 2, 2026-11-06 evening)
+## Resume here (session 3, 2026-11-06 night: overnight runs in progress)
 
-- Best from scratch: **2064** (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`);
-  public best to beat is 1910 (ryederek, Bluesky, March 2026). Not yet replayed on the
-  real game: use `export_game` + `tools/replay.html`.
-- Recipe that works: `rbeam --width 100..300 --k 4 --rollout 200 --seed N` (optionally
-  `--stoch 2`), many seeds, keep the best. Every static penalty tried made it worse.
-- Unfinished: width-1000 runs were stopped before finishing (re-run
-  `rbeam --width 1000 --k 4 --rollout 200 --seed 1..4`, ~6 min each); endgame re-search
-  of the 2064 game (`--prefix runs/best/scratch_2064_... --keep 1900 --width 500`) not
-  tried yet.
-- Visualization page "SPL-T Clockwork": source in `tools/viz/` (publish `index.html` with
-  `data.js` beside it; `tools/analysis/build_data.py` rebuilds `data.js` from
-  `runs/best/scratch_2064_stats.json`, `runs/exp` file names and a `rbeam --tree` dump).
-  The upper-bound models are `tools/analysis/pipe2.py` (single pipe) and `clockwork.py`.
-- Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true,
-  TODO block at top, `[FINAL BEST]` placeholder). Outreach list: `docs/OUTREACH.md`
-  (git-ignored).
-- Most promising next research step: a rollout policy that keeps the four pipes
-  staggered (the clockwork analysis below says the structure can reach ~3,000+ but the
-  heuristic has no notion of phase), then endgame polishing.
+- **Overnight queue** (detached workers; they survive the Claude session): see
+  `python -I tools/queue/summary.py` for every result and ratchet line, and
+  `runs/queue/workers.log` for what each worker is doing. Worker B runs the second ratchet
+  leg (`runs/ratchet/r2064b`, until ~04:00); worker A runs the pool ratchet
+  (`runs/ratchet/pool`, ~9.5 h) after the last experiments. `touch runs/queue/STOP` makes
+  both workers exit after their current job. The PC must not sleep.
+- **Best game when the night started: 2277** (`runs/exp/ratchet_smoke/best_2277.txt`,
+  copied to `runs/bin/start_2277.txt`). The longest game anywhere is whatever
+  `python -I tools/analysis/build_data.py` reports as "featured"; that also rebuilds the
+  page data. Then: `replay` it, copy it to `runs/best/`, export it for the hand-replay
+  page (`export_game`), republish `tools/viz/index.html` with `data.js` (artifact
+  https://claude.ai/artifact/TFs2adq7eKa8naU47FX2Ag), fill `[FINAL BEST]` in the blog
+  draft, and update README/TL;DR.
+- Public best to beat: 1910 (ryederek, Bluesky, 2026-03-20).
+- Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true;
+  fact-checked against Josh Holder's write-up in session 3). Video plan: Asana card
+  "SPL-T world-record video" on the Posts, Essays, and Videos board.
+
+## Session 3 (2026-11-06 evening, desktop, Claude Opus 5.5): the ratchet
+
+### What changed
+
+- **`src/rollout_beam.rs`**: the rollout beam moved into the library (rbeam is a thin
+  CLI). Same algorithm and the same dedup sort, so session-2 seeds reproduce their games
+  exactly (checked: width 30 seed 5 gives 1106 again). New options: `--maxkids M` (at most
+  M children of one parent survive selection) and `--rankpen X` (penalty per heuristic rank
+  below first, which only matters among rollouts that tie at the cap).
+- **`ratchet`**: take the best game, cut it `back` moves before its end, run one beam from
+  there with a fresh seed, keep the result if it is at least as long. Repeat for hours. It
+  can only improve. v4 keeps a pool of the N longest distinct games and draws each
+  attempt's width, rollout cap and stochastic rollouts from lists.
+- **`tools/queue`**: a job queue for long runs. Job files in `runs/queue/jobs/*.jobs` run
+  in name order (one shell command per line, claimed atomically with mkdir), so an
+  experiment file can jump ahead of an overnight file. Workers are started detached with
+  PowerShell `Start-Process` so they outlive the session.
+- **Tunable heuristic** (`heuristic::HParams`, `tune`): a scale factor on each of the
+  heuristic's 14 terms (defaults reproduce Josh Holder's weights exactly; re-checked
+  against his Python at all 2261 positions of the 1053 and 1208 games) and a (1+1)
+  evolution strategy that maximizes mean greedy survival from strong positions.
+
+### Results
+
+- **The ratchet is what works.** From the 2064 game: 2107, 2138, 2145 in the first five
+  minutes, 2238 and 2248 at six minutes; the second leg reached 2265 and 2270, and the
+  pool version 2277 in a 46-second test. All verified with `replay`.
+- **Where the ratchet's gains come from** (about 140 attempts in the first two legs):
+  cuts under 120 moves back *always* tie exactly, so the ending is decided more than 120
+  moves before the game ends. Cuts 120 to 480 back produce every improvement. Cuts beyond
+  ~500 back cost the most time and never improved anything in these samples (11 of the
+  first 35 attempts, 70% of the time). v4 therefore cuts 120-600 back.
+- **Seeds from scratch, more samples**: width 100 / k 4 / cap 200 over ten seeds is
+  1062-1808, mean 1413, sd 236. The session-2 values 1440 / 1855 / 1885 were lucky draws.
+  So the seed lottery alone will not reach the high 2000s; the ratchet is needed.
+- **Beam variants** (from scratch, small samples, all within noise of the baseline):
+  `--maxkids 2` 1092-1761 (mean 1507, n=6); `--rankpen 0.3` 1220 / 1846; width 200 with
+  `--maxkids 2` 1191 / 1942. Cap 300 and near-noiseless tie-breaks were still running.
+- **Tuning the heuristic does not help.** Training survival rose from 201.5 to 202.3 moves
+  and held-out survival fell from 208.3 to 201.0; every core term (imbalance, aspect,
+  point-block timing, height, next-highest) stayed at its original value. Josh Holder's
+  constants sit at a local optimum for greedy survival, so the gains must come from search.
+- **Fact check**: Josh Holder's write-up says he took the world record with 1196 (1208 with
+  human assistance). It does not mention 1133 or a phone; his repo's commit message says
+  "1053 without human aid, 1133 with human aid". Earlier text here saying 1133 was played
+  on a phone in January 2022 was an over-reading and has been corrected.
 
 ## Session 2 (2026-11-06, desktop, Claude Fable 5.1): rollout beam, 1780 from scratch
 

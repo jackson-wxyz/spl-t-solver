@@ -4,7 +4,7 @@ An attempt to find very long games of Simogo's *SPL-T* (2015). The score is the 
 splits made before no split is possible. Goal: understand what optimal play looks like and,
 ideally, beat the world record.
 
-## Status (2026-11-06, end of session 2)
+## Status (2026-11-06, session 3)
 
 | | splits |
 |---|---|
@@ -14,7 +14,8 @@ ideally, beat the world record.
 | 2022 world record: Jonathon Becker (@mangosquash), by hand | 1277 |
 | Best score posted publicly: ryederek on Bluesky, March 2026 (Legacy Collection) | 1910 |
 | Rollout beam, from scratch (`rbeam`, width 100, k 4, cap 200, seed 3, ~40 s on the desktop) | 1885 (`runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt`) |
-| **Rollout beam, from scratch, two stochastic rollouts per child** (width 100, k 4, cap 200, `--stoch 2`, seed 1, ~100 s) | **2064** (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`) |
+| Rollout beam, from scratch, two stochastic rollouts per child (width 100, k 4, cap 200, `--stoch 2`, seed 1, ~100 s) | 2064 (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`) |
+| **Ratchet** (re-search the best game's tail with fresh seeds; session 3, overnight runs in progress) | **2277+** (see `docs/RESEARCH_LOG.md`, "Resume here") |
 | Rollout beam resuming Josh Holder's 1208 game at move 700 | 1984 (`runs/best/from_josh1208_at700_1984_rbeam_w100_k4_r300.txt`) |
 
 The engine replays all four published record games move for move, and every sequence in
@@ -29,9 +30,10 @@ human replay tool listed under "Next steps".
   record) with brute-force random play over days of compute.
   [Blog post](http://www.flashingleds.net/brute_SPL-T/brute_spl-t.html).
 - **Josh Holder** built on that emulator. A hand-tuned move-scoring heuristic plus a
-  backtracking search ("ParanoidPlay") found 1133 → 1196 splits; adding human edits took it
-  to 1208. He set the **1133 world record (Jan 2022) by replaying the computed sequence on
-  his phone**, which is what makes his emulator a trustworthy rules oracle. He also tried
+  backtracking search ("ParanoidPlay") found 1053 splits alone, 1133 with human help, then
+  1196; adding human edits took it to 1208. His write-up says he **took the world record
+  with 1196**, which means his emulator's sequences were played on the real game, and that
+  is what makes the emulator a trustworthy rules oracle. He also tried
   AlphaZero-style RL (`josh-holder/nn_split`) and found it far too slow to learn.
   [Blog post](https://josh-holder.github.io/projects/splt-blog),
   [code](https://github.com/josh-holder/SPLT). He guessed the practical ceiling is about
@@ -67,7 +69,10 @@ Of the approaches considered, existing open-source code turned out to be the rig
   (`weighting.py`), checked weight-for-weight against his Python at all 4,590 record
   positions. Also the rollout policies built on it (greedy, avoid-big, softmax-sampled).
 - `src/pipes.rs` - pipe-level structure (cluster values per 2-column pipe, "twins" count).
-- `src/bin/rbeam.rs` - **the current best solver**: beam search over the heuristic's top-k
+- `src/bin/ratchet.rs` - **the current best solver**: repeatedly re-searches the tail of
+  the best games found so far with `rbeam`'s search and keeps anything at least as long.
+- `tools/queue/` - job queue for long runs (`runner.sh`, `summary.py`).
+- `src/rollout_beam.rs`, `src/bin/rbeam.rs` - beam search over the heuristic's top-k
   moves, each child scored by how long a greedy rollout survives from it. Flags: `--width`,
   `--k`, `--rollout` (cap), `--seed` (deterministic score noise, for several samples per
   setting), `--policy greedy|avoidbig|both`, `--stoch N --temp T`, `--wtwin`, `--prefix FILE
