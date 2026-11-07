@@ -1,6 +1,7 @@
 """Summarize runs/queue/results.log: per setting, n / mean / best, plus ratchet progress.
 usage: python -I tools/queue/summary.py [results.log]"""
 import re, sys, statistics as st, os, glob
+os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 path = sys.argv[1] if len(sys.argv) > 1 else 'runs/queue/results.log'
 groups = {}
 for line in open(path, encoding='utf-8', errors='replace'):
