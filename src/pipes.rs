@@ -81,3 +81,90 @@ pub fn unison_dist(b: &Board, pairs: u8) -> f32 {
     }
     d
 }
+
+/// Does playing `m` on `b` break a pipe? Returns a bit mask: 1 = the move creates a cluster
+/// underneath a point block that has already been halved (a "plug": it is worth the full
+/// split count and sits below clusters worth much less, so the pipe stops cycling under it
+/// for hundreds of moves); 2 = it creates a cluster on top of free blocks (it buries them:
+/// they can never be completed without making a plug). 0 = neither, or the move creates no
+/// cluster. Clusters formed by blocks falling during the move count too. `b` must allow the
+/// move. A cluster under one made a few moves earlier (not yet halved) is not a plug: the
+/// two are nearly equal and explode together.
+pub fn breaks_pipe(b: &Board, m: usize) -> u8 {
+    let mut t = b.clone();
+    match t.play(m) {
+        Some(info) if info.new_point_blocks > 0 => broken_after(&t),
+        _ => 0,
+    }
+}
+
+/// `breaks_pipe` for a board on which the move has just been played.
+pub fn broken_after(t: &Board) -> u8 {
+    let n = t.moves;
+    let mut out = 0u8;
+    for bl in t.blocks() {
+        // A cluster made this move is worth exactly n (older ones have counted down).
+        if bl.pts != n {
+            continue;
+        }
+        for x in bl.x as usize..(bl.x + bl.w) as usize {
+            for y in 0..bl.y as usize {
+                let id = t.grid[y * W + x];
+                if id != EMPTY {
+                    let p = t.blocks[id as usize].pts as u32;
+                    if p > 0 && p * 4 < n as u32 * 3 {
+                        out |= 1;
+                    }
+                }
+            }
+            let below = (bl.y + bl.h) as usize;
+            if below < H {
+                let id = t.grid[below * W + x];
+                if id != EMPTY && t.blocks[id as usize].pts == 0 {
+                    out |= 2;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// How well pipe `p` is set up to keep cycling: the number of clusters it holds (at most 7
+/// count), minus 2 for every cluster that is worth less than 1.5 times the one below it (out
+/// of order, or a twin), minus 1 if its two columns do not hold the same stack, minus half a
+/// point per free cell buried under a point block, minus up to 3 for a bottom cluster that is
+/// far from exploding (1 per 100 of its value). A pipe that makes one cluster per explosion
+/// on top of a clean staircase scores 6 to 7; a pipe used as a store of spare blocks scores
+/// around 0.
+pub fn health(b: &Board, p: usize) -> f32 {
+    let c = clusters(b, p);
+    let mut h = c.len().min(7) as f32;
+    for w in c.windows(2) {
+        if (w[1] as f32) < 1.5 * w[0] as f32 {
+            h -= 2.0;
+        }
+    }
+    if column_values(b, 2 * p) != column_values(b, 2 * p + 1) {
+        h -= 1.0;
+    }
+    let mut buried = 0u32;
+    for x in 2 * p..2 * p + 2 {
+        let mut seen_point = false;
+        for y in 0..H {
+            let id = b.grid[y * W + x];
+            if id == EMPTY {
+                continue;
+            }
+            if b.blocks[id as usize].pts > 0 {
+                seen_point = true;
+            } else if seen_point {
+                buried += 1;
+            }
+        }
+    }
+    h -= 0.5 * buried as f32;
+    if let Some(&v) = c.first() {
+        h -= (v as f32 / 100.0).min(3.0);
+    }
+    h
+}

@@ -4,6 +4,7 @@
 //!            [--pool N] [--diverse D] [--slack S] [--minback B0] [--maxback B1]
 //!            [--pwidth W] [--rounds R] [--neutral P] [--deep B] [--watch DIR[,DIR...]]
 //!            [--beam P --widths 100,200 --caps 150,250 --stochs 2 --bminback 120 --bmaxback 400]
+//!            [--gres N | --gresl 8,12,24] [--kfree N] [--clean M --cleanfrom T]
 //!
 //! One iteration: pick a pool game, pick a move `t` between B1 and B0 moves before its end,
 //! play a different move there and complete the game by following the original (`kick`),
@@ -21,6 +22,9 @@
 //! the tail from a cut (the ratchet's move, with width, rollout cap and stochastic rollouts
 //! drawn from the lists), followed by the same polish. Beam attempts cost about ten times a
 //! kick but can rebuild a whole tail, which is what a game far from the plateau needs.
+//! --gres N: guided rollouts keep off the blocks the game is about to split when they have to
+//! leave its schedule (see `rollout_beam::Config::gres`); --gresl draws N from a list for each
+//! iteration, so a game that is a local optimum for one setting gets tried with the others.
 //! --watch: every 200 iterations, also read best.txt from these directories into the pool,
 //! so several workers can share their finds.
 //! Writes DIR/best.txt, DIR/best_<splits>.txt, and DIR/ils.log (one line per iteration that
@@ -76,6 +80,7 @@ impl Pool {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    splt::rollout_beam::load_start(&args);
     let start_paths: String = arg(&args, "--start").expect("--start FILE[,FILE...]");
     let hours: f64 = arg(&args, "--hours").unwrap_or(8.0);
     let out: String = arg(&args, "--out").unwrap_or_else(|| "runs/ils".to_string());
@@ -96,6 +101,7 @@ fn main() {
     let (widths, caps, stochs) = (list("--widths", 100), list("--caps", 200), list("--stochs", 2));
     let bmin: usize = arg(&args, "--bminback").unwrap_or(120);
     let bmax: usize = arg(&args, "--bmaxback").unwrap_or(400);
+    let gresl = list("--gresl", cfg.gres);
     std::fs::create_dir_all(&out).ok();
 
     let mut pool = Pool { games: Vec::new(), n: arg(&args, "--pool").unwrap_or(8).max(1), diverse: arg(&args, "--diverse").unwrap_or(100) };
@@ -108,10 +114,13 @@ fn main() {
     let lens = |p: &Pool| p.games.iter().map(|g| g.len().to_string()).collect::<Vec<_>>().join(",");
     writeln!(
         log,
-        "# start {start_paths} at {} pool=[{}] diverse={} slack={slack} back={min_back}..{max_back} pwidth={pwidth} rounds={rounds} neutral={neutral} deep={deep} watch={watch:?} beam={pbeam} widths={widths:?} caps={caps:?} stochs={stochs:?} bback={bmin}..{bmax}",
+        "# start {start_paths} at {} pool=[{}] diverse={} slack={slack} back={min_back}..{max_back} pwidth={pwidth} rounds={rounds} neutral={neutral} deep={deep} watch={watch:?} beam={pbeam} widths={widths:?} caps={caps:?} stochs={stochs:?} bback={bmin}..{bmax} gres={gresl:?} kfree={} clean={}@{}",
         now(),
         lens(&pool),
-        pool.diverse
+        pool.diverse,
+        cfg.kfree,
+        cfg.clean,
+        cfg.clean_from
     )
     .unwrap();
     println!("ILS start splits={best_len} pool=[{}]", lens(&pool));
@@ -146,6 +155,7 @@ fn main() {
         let parent = pool.games[pi].clone();
         let plen = parent.len();
         let seed = seed0.wrapping_mul(1_000_003).wrapping_add(iter);
+        let cfg = Config { gres: gresl[((next() * gresl.len() as f64) as usize).min(gresl.len() - 1)], ..cfg.clone() };
         let ti = Instant::now();
         let is_beam = next() < pbeam;
         let (back, t, klen, mut res);
@@ -183,7 +193,9 @@ fn main() {
         }
         let rlen = res.len();
         if rlen >= plen && res != parent {
-            assert_eq!(verify(&res).map(|x| x as usize), Some(rlen), "ILS result failed verification");
+            // (`verify` returns the split count, which for a --startboard run includes the
+            // moves before the constructed position.)
+            assert_eq!(verify(&res).map(|x| x as usize), Some(rlen + splt::engine::Board::start().moves as usize), "ILS result failed verification");
             let what;
             if rlen > plen {
                 gains += 1;

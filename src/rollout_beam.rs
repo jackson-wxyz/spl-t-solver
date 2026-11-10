@@ -10,6 +10,7 @@
 
 use crate::engine::Board;
 use crate::heuristic::{analyse, choose_hp, choose_stochastic_hp, play_out_hp, play_out_stochastic_hp, weights_with, HParams, Policy};
+use crate::pipes::breaks_pipe;
 use crate::search::{features, passive_bound, Params};
 use rayon::prelude::*;
 use std::time::Instant;
@@ -75,6 +76,38 @@ pub struct Config {
     /// Guide game for guided rollouts (see `play_out_guided`), as the geometry of the block
     /// split at each move number.
     pub guide: Option<Guide>,
+    /// Clean-pipe rule (bit mask as in `pipes::breaks_pipe`): from move `clean_from` on, the
+    /// beam, the kick and every rollout refuse moves that make a plug (bit 0) or bury free
+    /// blocks (bit 1) while another move exists. A pipe that is never plugged keeps cycling,
+    /// which is what a fourth working pipe late in the game needs.
+    pub clean: u8,
+    pub clean_from: usize,
+    /// Guided rollouts, when the guide's move is not available: first look for a move on a
+    /// block that none of the guide's next `gres` moves is going to split (so the schedule of
+    /// the pipes the guide still describes is left alone), then for a later guide move that
+    /// can be played early, and only then take the heuristic's choice. 0 = heuristic's choice
+    /// at once (the original behaviour).
+    pub gres: usize,
+    /// Clean-pipe rule (as `clean`) applied only to the off-guide moves of guided rollouts:
+    /// the guide's own moves and the beam's children are not restricted.
+    pub fclean: u8,
+    /// Guided beams: also expand the guide's own move for the turn when the heuristic's top k
+    /// do not contain it, so the unchanged game stays in the beam and every later deviation
+    /// from it gets tried.
+    pub gkid: bool,
+    /// Guided beams: also expand up to this many moves (best first) on blocks that the guide
+    /// has no plans for in its next `gres` moves (at least 12): what the pipe the guide does
+    /// not describe could be doing instead.
+    pub kfree: usize,
+    /// Score bonus per point of `pipes::health` of pipe `hpipe`: makes a beam prefer lines
+    /// that keep that pipe cycling even when their rollout is a little shorter.
+    pub whealth: f32,
+    pub hpipe: usize,
+    /// Stop the beam once it reaches this split count and return the game through the node
+    /// with the best score (not the longest rollout seen). 0 = search to the end. With
+    /// `whealth`, this is how to get a game whose middle part has a healthy pipe, as a
+    /// starting point for the local search.
+    pub stop_at: usize,
 }
 
 /// A game as the geometry [x, y, w, h] of the block split at each move (index = split count
@@ -82,8 +115,11 @@ pub struct Config {
 pub type Guide = std::sync::Arc<Vec<[u8; 4]>>;
 
 pub fn guide_of(moves: &[u8]) -> Guide {
-    let mut b = Board::new();
-    let mut g = Vec::with_capacity(moves.len());
+    let mut b = Board::start();
+    // The index is the split count, so a game from a constructed position (`Board::set_start`)
+    // gets entries that match nothing for the moves before it.
+    let mut g = vec![[255u8; 4]; b.moves as usize];
+    g.reserve(moves.len());
     for &m in moves {
         let bl = b.blocks[m as usize];
         g.push([bl.x, bl.y, bl.w, bl.h]);
@@ -251,7 +287,99 @@ pub fn play_out_todo(b: &mut Board, guide: &[[u8; 4]], mut st: Todo, ahead: usiz
 
 /// Time-aligned guided rollout without a cache, for analysis tools. Returns moves played.
 pub fn play_out_aligned(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams) -> usize {
-    play_out_guided(b, guide, scan, hp, None, None).0
+    play_out_guided(b, guide, scan, hp, (0, 0, 0, 0), None, None).0
+}
+
+/// What a guided rollout plays when the guide's move for this turn is not available (see
+/// `Config::gres`). `cl` is the clean-pipe rule in force.
+fn off_guide_move(b: &Board, guide: &[[u8; 4]], hp: &HParams, cl: u8, res: usize) -> Option<usize> {
+    if res == 0 {
+        return choose_clean(b, hp, cl);
+    }
+    let t = b.moves as usize;
+    let ahead = &guide[(t + 1).min(guide.len())..(t + 1 + res).min(guide.len())];
+    let ok = |m: usize| cl == 0 || breaks_pipe(b, m) & cl == 0;
+    let ranked = top_k_moves_hp(b, 0, hp);
+    // The heuristic's best move on a block the guide has no plans for.
+    let free_block = || {
+        ranked.iter().map(|&m| m as usize).find(|&m| {
+            let bl = b.blocks[m];
+            !ahead.contains(&[bl.x, bl.y, bl.w, bl.h]) && ok(m)
+        })
+    };
+    // The earliest later guide move (same split direction) that can be played now.
+    let early = || {
+        let mut i = t + 2;
+        while i < (t + 1 + res).min(guide.len()) {
+            if let Some(m) = guide_at(b, guide, i).filter(|&m| ok(m)) {
+                return Some(m);
+            }
+            i += 2;
+        }
+        None
+    };
+    // In this order: with the two swapped, a guided search finds nothing the plain follower
+    // did not (eight seeds from move 2300 of the 3012 game: 3012 every time but one, against
+    // 3032-3078 this way round).
+    let found = free_block().or_else(early);
+    if found.is_some() {
+        return found;
+    }
+    // Failing both: anything clean, then anything.
+    ranked.iter().map(|&m| m as usize).find(|&m| ok(m)).or(ranked.first().map(|&m| m as usize))
+}
+
+/// The clean-pipe rule in force at this position: `clean` from move `from` on, else none.
+#[inline]
+fn clean_at(b: &Board, clean: u8, from: usize) -> u8 {
+    if clean != 0 && b.moves as usize >= from { clean } else { 0 }
+}
+
+/// The heuristic's best move that does not break a pipe under `clean` (see
+/// `pipes::breaks_pipe`), or its plain best move if every move does. With `clean` = 0 this
+/// is the greedy choice.
+pub fn choose_clean(b: &Board, hp: &HParams, clean: u8) -> Option<usize> {
+    let m0 = choose_hp(b, Policy::Greedy, hp)?;
+    if clean == 0 || breaks_pipe(b, m0) & clean == 0 {
+        return Some(m0);
+    }
+    top_k_moves_hp(b, 0, hp).into_iter().map(|m| m as usize).find(|&m| breaks_pipe(b, m) & clean == 0).or(Some(m0))
+}
+
+/// The move a deterministic rollout plays: the policy's choice, or under the clean-pipe rule
+/// the greedy choice among moves that keep the pipes clean.
+#[inline]
+fn pick_det(b: &Board, pol: Policy, cfg: &Config) -> Option<usize> {
+    match clean_at(b, cfg.clean, cfg.clean_from) {
+        0 => choose_hp(b, pol, &cfg.hp),
+        cl => choose_clean(b, &cfg.hp, cl),
+    }
+}
+
+/// The move a stochastic rollout plays: the sampled move, replaced under the clean-pipe rule
+/// by the best clean move when the sample would break a pipe.
+#[inline]
+fn pick_stoch(b: &Board, rng: &mut u64, cfg: &Config) -> Option<usize> {
+    let m = choose_stochastic_hp(b, cfg.temp, rng, &cfg.hp)?;
+    match clean_at(b, cfg.clean, cfg.clean_from) {
+        cl if cl != 0 && breaks_pipe(b, m) & cl != 0 => choose_clean(b, &cfg.hp, cl),
+        _ => Some(m),
+    }
+}
+
+/// Heuristic play-out of at most `cfg.cap` moves (0 = to the end) with `pick`.
+/// Returns (moves played, game over?).
+#[inline]
+fn play_out_pick(b: &mut Board, cfg: &Config, mut pick: impl FnMut(&Board) -> Option<usize>) -> (usize, bool) {
+    let mut n = 0usize;
+    loop {
+        if cfg.cap > 0 && n >= cfg.cap {
+            return (n, false);
+        }
+        let Some(m) = pick(b) else { return (n, true) };
+        b.play(m).unwrap();
+        n += 1;
+    }
 }
 
 /// Where guided rollouts end, by position: hash of a position -> split count at which the
@@ -314,7 +442,10 @@ impl Default for EndCache {
 /// replays the rest of it; from a position that deviated it tests whether the deviation can
 /// rejoin the guide's schedule and what that does to the ending. Returns (moves played,
 /// whether the ending came from `cache`; the board is then not the end position).
-fn play_out_guided(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams, record: Option<&mut Vec<u8>>, cache: Option<&EndCache>) -> (usize, bool) {
+///
+/// `clean` = (rule, first move it applies to, `Config::gres`, `Config::fclean`): a guide move
+/// that would break a pipe under the rule is skipped, and the fallback is `off_guide_move`.
+fn play_out_guided(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams, clean: (u8, usize, usize, u8), record: Option<&mut Vec<u8>>, cache: Option<&EndCache>) -> (usize, bool) {
     let start = b.moves;
     let mut rec = record;
     let mut seen: Vec<u64> = Vec::new();
@@ -326,9 +457,10 @@ fn play_out_guided(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams, 
             }
             seen.push(h);
         }
-        let m = match guided_move(b, guide, scan) {
+        let cl = clean_at(b, clean.0, clean.1);
+        let m = match guided_move(b, guide, scan).filter(|&m| cl == 0 || breaks_pipe(b, m) & cl == 0) {
             Some(m) => m,
-            None => match choose_hp(b, Policy::Greedy, hp) {
+            None => match off_guide_move(b, guide, hp, cl | clean_at(b, clean.3, clean.1), clean.2) {
                 Some(m) => m,
                 None => break (b.moves, false),
             },
@@ -375,8 +507,33 @@ impl Default for Config {
             gcache: true,
             guided: false,
             guide: None,
+            clean: 0,
+            clean_from: 0,
+            gres: 0,
+            fclean: 0,
+            gkid: false,
+            kfree: 0,
+            whealth: 0.0,
+            hpipe: 0,
+            stop_at: 0,
         }
     }
+}
+
+/// `--startboard FILE`: start every game of this process from the position in FILE (written
+/// by `whatif`) instead of the empty board. Call before anything replays a game.
+pub fn load_start(args: &[String]) {
+    if let Some(path) = arg::<String>(args, "--startboard") {
+        Board::set_start(Board::from_text(&std::fs::read_to_string(&path).expect("read --startboard")));
+    }
+}
+
+/// Complete a game from `b` by following `guide` (the plain time-aligned follower with the
+/// off-guide rule of `cfg.gres`); returns the moves played.
+pub fn follow(b: &mut Board, guide: &[[u8; 4]], cfg: &Config) -> Vec<u8> {
+    let mut out = Vec::new();
+    play_out_guided(b, guide, cfg.gscan, &cfg.hp, (cfg.clean, cfg.clean_from, cfg.gres, cfg.fclean), Some(&mut out), None);
+    out
 }
 
 pub fn arg<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
@@ -435,6 +592,15 @@ impl Config {
             gcache: arg::<u8>(args, "--gcache").unwrap_or(1) != 0,
             guided: arg::<u8>(args, "--guide").unwrap_or(0) != 0,
             guide: None,
+            clean: arg(args, "--clean").unwrap_or(d.clean),
+            clean_from: arg(args, "--cleanfrom").unwrap_or(d.clean_from),
+            gres: arg(args, "--gres").unwrap_or(d.gres),
+            fclean: arg(args, "--fclean").unwrap_or(d.fclean),
+            gkid: arg::<u8>(args, "--gkid").unwrap_or(0) != 0,
+            kfree: arg(args, "--kfree").unwrap_or(d.kfree),
+            whealth: arg(args, "--whealth").unwrap_or(d.whealth),
+            hpipe: arg(args, "--hpipe").unwrap_or(d.hpipe),
+            stop_at: arg(args, "--stopat").unwrap_or(d.stop_at),
         }
     }
 
@@ -471,6 +637,9 @@ impl Config {
         if self.wsync != 0.0 {
             t.push_str(&format!("_sy{}", self.wsync));
         }
+        if self.clean != 0 {
+            t.push_str(&format!("_cl{}", self.clean));
+        }
         t.push_str(&format!("_s{}", self.seed));
         t
     }
@@ -478,7 +647,7 @@ impl Config {
     /// All settings, for RESULT lines.
     pub fn describe(&self) -> String {
         format!(
-            "width={} k={} rollout={} tie={} policy={} stoch={} temp={} wtwin={} wstuck={} stuckt={} wdebt={} maxkids={} rankpen={} hparams={} wchain={} guide={} nocluster={} wsync={} seed={} noise={}",
+            "width={} k={} rollout={} tie={} policy={} stoch={} temp={} wtwin={} wstuck={} stuckt={} wdebt={} maxkids={} rankpen={} hparams={} wchain={} guide={} nocluster={} wsync={} clean={}@{} gres={} fclean={} seed={} noise={}",
             self.width,
             self.k,
             self.cap,
@@ -497,6 +666,10 @@ impl Config {
             self.guide.is_some() as u8,
             self.nocluster,
             self.wsync,
+            self.clean,
+            self.clean_from,
+            self.gres,
+            self.fclean,
             self.seed,
             self.noise
         )
@@ -532,19 +705,24 @@ fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, be
     };
     for &pol in &cfg.pols {
         let mut b = start.clone();
-        let (n, over) = play_out_hp(&mut b, pol, &cfg.hp, cfg.cap);
+        let (n, over) = if cfg.clean == 0 { play_out_hp(&mut b, pol, &cfg.hp, cfg.cap) } else { play_out_pick(&mut b, cfg, |b| pick_det(b, pol, cfg)) };
         consider(n, over, b, Kind::Det(pol));
     }
     for j in 0..cfg.stoch {
         let s = seed0.wrapping_add(j as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0xD1B54A32D192ED03;
         let mut b = start.clone();
-        let (n, over) = play_out_stochastic_hp(&mut b, cfg.temp, s, cfg.cap, &cfg.hp);
+        let (n, over) = if cfg.clean == 0 {
+            play_out_stochastic_hp(&mut b, cfg.temp, s, cfg.cap, &cfg.hp)
+        } else {
+            let mut rng = s.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+            play_out_pick(&mut b, cfg, |b| pick_stoch(b, &mut rng, cfg))
+        };
         consider(n, over, b, Kind::Stoch(s));
     }
     if let Some(g) = &cfg.guide {
         let mut b = start.clone();
         let go = |b: &mut Board, cache: Option<&EndCache>| {
-            if cfg.gtodo { play_out_todo(b, g, st, cfg.gahead, &cfg.hp, None, cache) } else { play_out_guided(b, g, cfg.gscan, &cfg.hp, None, cache) }
+            if cfg.gtodo { play_out_todo(b, g, st, cfg.gahead, &cfg.hp, None, cache) } else { play_out_guided(b, g, cfg.gscan, &cfg.hp, (cfg.clean, cfg.clean_from, cfg.gres, cfg.fclean), None, cache) }
         };
         let (mut n, hit) = go(&mut b, cache);
         if hit && start.moves as usize + n > best_len as usize {
@@ -555,7 +733,7 @@ fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, be
     }
     if cfg.pols.is_empty() && cfg.stoch == 0 && cfg.guide.is_none() {
         let mut b = start.clone();
-        let (n, over) = play_out_hp(&mut b, Policy::Greedy, &cfg.hp, cfg.cap);
+        let (n, over) = play_out_pick(&mut b, cfg, |b| pick_det(b, Policy::Greedy, cfg));
         consider(n, over, b, Kind::Det(Policy::Greedy));
     }
     let (n, over, b, kind) = best.unwrap();
@@ -563,7 +741,7 @@ fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, be
 }
 
 fn replay_kind(b: &mut Board, kind: Kind, cfg: &Config, st: Todo) -> Vec<u8> {
-    let (temp, hp) = (cfg.temp, &cfg.hp);
+    let hp = &cfg.hp;
     let mut out = Vec::new();
     match kind {
         Kind::Guided => {
@@ -571,24 +749,74 @@ fn replay_kind(b: &mut Board, kind: Kind, cfg: &Config, st: Todo) -> Vec<u8> {
             if cfg.gtodo {
                 play_out_todo(b, g, st, cfg.gahead, hp, Some(&mut out), None);
             } else {
-                play_out_guided(b, g, cfg.gscan, hp, Some(&mut out), None);
+                play_out_guided(b, g, cfg.gscan, hp, (cfg.clean, cfg.clean_from, cfg.gres, cfg.fclean), Some(&mut out), None);
             }
         }
         Kind::Det(pol) => {
-            while let Some(m) = choose_hp(b, pol, hp) {
+            while let Some(m) = pick_det(b, pol, cfg) {
                 b.play(m).unwrap();
                 out.push(m as u8);
             }
         }
         Kind::Stoch(seed) => {
             let mut rng = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
-            while let Some(m) = choose_stochastic_hp(b, temp, &mut rng, hp) {
+            while let Some(m) = pick_stoch(b, &mut rng, cfg) {
                 b.play(m).unwrap();
                 out.push(m as u8);
             }
         }
     }
     out
+}
+
+/// `top_k_moves_opt` under the clean-pipe rule: the top k among the moves that do not break
+/// a pipe under `clean`; if every move does, the single best move.
+pub fn top_k_clean(b: &Board, k: usize, hp: &HParams, avoid_clusters: bool, clean: u8) -> Vec<u8> {
+    if clean == 0 {
+        return top_k_moves_opt(b, k, hp, avoid_clusters);
+    }
+    let all = top_k_moves_opt(b, 0, hp, avoid_clusters);
+    let mut out: Vec<u8> = all.iter().copied().filter(|&m| breaks_pipe(b, m as usize) & clean == 0).collect();
+    if out.is_empty() {
+        out.extend(all.first());
+    }
+    if k > 0 {
+        out.truncate(k);
+    }
+    out
+}
+
+/// The moves a beam node is expanded with: the heuristic's top k (under the clean-pipe rule
+/// and the opening rule), plus, in a guided beam, the guide's own move (`gkid`) and moves on
+/// blocks the guide leaves alone (`kfree`).
+fn candidate_moves(node: &Board, cfg: &Config) -> Vec<u8> {
+    let cl = clean_at(node, cfg.clean, cfg.clean_from);
+    let avoid = (node.moves as usize) < cfg.nocluster;
+    let mut mv = top_k_clean(node, cfg.k, &cfg.hp, avoid, cl);
+    let Some(g) = &cfg.guide else { return mv };
+    let t = node.moves as usize;
+    if cfg.gkid {
+        if let Some(m) = guide_at(node, g, t).filter(|&m| cl == 0 || breaks_pipe(node, m) & cl == 0) {
+            if !mv.contains(&(m as u8)) {
+                mv.push(m as u8);
+            }
+        }
+    }
+    if cfg.kfree > 0 && cfg.k > 0 {
+        let ahead = &g[t.min(g.len())..(t + 1 + cfg.gres.max(12)).min(g.len())];
+        let mut added = 0;
+        for m in top_k_clean(node, 0, &cfg.hp, avoid, cl) {
+            if added >= cfg.kfree {
+                break;
+            }
+            let bl = node.blocks[m as usize];
+            if !ahead.contains(&[bl.x, bl.y, bl.w, bl.h]) && !mv.contains(&m) {
+                mv.push(m);
+                added += 1;
+            }
+        }
+    }
+    mv
 }
 
 /// The top-k heuristic moves, best first (k = 0: all legal moves).
@@ -637,7 +865,7 @@ pub struct Outcome {
 /// node kept at that level. `progress`: print a line every 50 levels to stderr.
 pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write>, progress: bool) -> Outcome {
     let p = Params { stuck_t: cfg.stuck_t, ..Params::default() };
-    let mut start = Board::new();
+    let mut start = Board::start();
     for &m in prefix {
         start.play(m as usize).expect("prefix contains an illegal move");
     }
@@ -664,7 +892,7 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
             .par_iter()
             .enumerate()
             .flat_map_iter(|(pi, node)| {
-                let mv = top_k_moves_opt(node, cfg.k, &cfg.hp, (node.moves as usize) < cfg.nocluster);
+                let mv = candidate_moves(node, cfg);
                 mv.into_iter().enumerate().map(move |(r, m)| {
                     let mut st = ftodo_ref[pi];
                     if use_todo {
@@ -711,6 +939,9 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
                 if cfg.wsync != 0.0 {
                     s -= cfg.wsync * crate::pipes::unison_dist(&c, cfg.sync_pairs);
                 }
+                if cfg.whealth != 0.0 {
+                    s += cfg.whealth * crate::pipes::health(&c, cfg.hpipe);
+                }
                 if cfg.noise > 0.0 {
                     let z = mix(seed ^ (level as u64) << 40 ^ (pi as u64) << 8 ^ m as u64);
                     s += cfg.noise * (z >> 40) as f32 / (1u64 << 24) as f32;
@@ -730,6 +961,8 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
         if let Some(f) = forced {
             best = (scored[f].3, level + 1, 0, scored[f].6); // index fixed below
         }
+        let stop_now = cfg.stop_at > 0 && start.moves as usize + level + 1 >= cfg.stop_at;
+        let info: Vec<((u32, u8), f32, Kind)> = if stop_now { scored.iter().map(|c| ((c.0, c.1), c.2, c.6)).collect() } else { Vec::new() };
         let mut live: Vec<(u32, u8, f32, u16, Board, Todo)> = Vec::with_capacity(scored.len());
         for (j, (pi, m, s, reached, _over, c, _, st)) in scored.into_iter().enumerate() {
             if Some(j) == forced {
@@ -765,6 +998,20 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
             let idx = live.iter().position(|c| c.2 == f32::INFINITY).expect("forced child kept");
             best.2 = idx as u32;
         }
+        if stop_now {
+            // The result is the game through the best-scoring node, not the longest rollout.
+            let mut pick: Option<(usize, f32, Kind, u16)> = None;
+            for (i, c) in live.iter().enumerate() {
+                if let Some(&(_, s, kind)) = info.iter().find(|x| x.0 == (c.0, c.1)) {
+                    if pick.is_none_or(|p| s > p.1) {
+                        pick = Some((i, s, kind, c.3));
+                    }
+                }
+            }
+            if let Some((i, _, kind, reached)) = pick {
+                best = (reached, level + 1, i as u32, kind);
+            }
+        }
         if let Some(w) = tree.as_mut() {
             let depth = start.moves as usize + level + 1;
             let mut line = format!("{}", level + 1);
@@ -776,6 +1023,9 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
         }
         history.push(live.iter().map(|&(pi, m, _, _, _, _)| (pi, m)).collect());
         (frontier, ftodo) = live.into_iter().map(|(_, _, _, _, b, st)| (b, st)).unzip();
+        if stop_now {
+            break;
+        }
 
         if progress && (level + 1) % 50 == 0 {
             eprintln!(
@@ -800,7 +1050,7 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     }
     let mut moves = prefix.to_vec();
     moves.extend(rev.into_iter().rev());
-    let mut b = Board::new();
+    let mut b = Board::start();
     let mut st = Todo::at(if use_todo { prefix.len() } else { 0 });
     for (i, &m) in moves.iter().enumerate() {
         if use_todo && i >= prefix.len() {
@@ -811,8 +1061,10 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     }
     moves.extend(replay_kind(&mut b, bkind, cfg, st));
     assert!(b.is_over(), "reconstructed game not over");
-    assert_eq!(b.moves, splits, "reconstructed game length mismatch");
-    Outcome { moves, splits, rollouts, secs: t0.elapsed().as_secs_f64() }
+    // (With `stop_at` the chosen node's length may have come from the ending cache, which is
+    // exact only up to tie-breaks; the replayed game is what counts.)
+    assert!(cfg.stop_at > 0 || b.moves == splits, "reconstructed game length mismatch");
+    Outcome { moves, splits: b.moves, rollouts, secs: t0.elapsed().as_secs_f64() }
 }
 
 /// Polish a finished game: guided-only beam searches from move `from`, each guided by the
@@ -851,11 +1103,29 @@ pub fn polish(moves: &[u8], from: usize, cfg: &Config, rounds: usize, seed: u64)
 /// complete game, or None if the position has no alternative. Most kicks end much sooner
 /// than the original; `polish` from move t + 1 then searches for a repair.
 pub fn kick(moves: &[u8], t: usize, pick: u64, k: usize, cfg: &Config) -> Option<Vec<u8>> {
-    let mut b = Board::new();
+    let mut b = Board::start();
     for &m in &moves[..t] {
         b.play(m as usize).expect("illegal move");
     }
-    let alts: Vec<u8> = top_k_moves_hp(&b, k, &cfg.hp).into_iter().filter(|&m| m != moves[t]).collect();
+    let cl = clean_at(&b, cfg.clean, cfg.clean_from);
+    let guide = guide_of(moves);
+    // With `kfree`, kick only on blocks the game leaves alone for the next `gres` moves (the
+    // pipe its schedule does not describe), if there is one.
+    let mut alts: Vec<u8> = Vec::new();
+    if cfg.kfree > 0 {
+        let ta = b.moves as usize;
+        let ahead = &guide[ta..(ta + 1 + cfg.gres.max(12)).min(guide.len())];
+        alts = top_k_clean(&b, 0, &cfg.hp, false, cl)
+            .into_iter()
+            .filter(|&m| {
+                let bl = b.blocks[m as usize];
+                !ahead.contains(&[bl.x, bl.y, bl.w, bl.h])
+            })
+            .collect();
+    }
+    if alts.is_empty() {
+        alts = top_k_clean(&b, k, &cfg.hp, false, cl).into_iter().filter(|&m| m != moves[t]).collect();
+    }
     if alts.is_empty() {
         return None;
     }
@@ -864,13 +1134,12 @@ pub fn kick(moves: &[u8], t: usize, pick: u64, k: usize, cfg: &Config) -> Option
     out.push(alt);
     let bl = b.blocks[alt as usize];
     b.play(alt as usize).unwrap();
-    let guide = guide_of(moves);
     if cfg.gtodo {
         let mut st = Todo::at(t);
         st.consume([bl.x, bl.y, bl.w, bl.h], t, &guide, cfg.gahead);
         play_out_todo(&mut b, &guide, st, cfg.gahead, &cfg.hp, Some(&mut out), None);
     } else {
-        play_out_guided(&mut b, &guide, cfg.gscan, &cfg.hp, Some(&mut out), None);
+        play_out_guided(&mut b, &guide, cfg.gscan, &cfg.hp, (cfg.clean, cfg.clean_from, cfg.gres, cfg.fclean), Some(&mut out), None);
     }
     Some(out)
 }
@@ -883,7 +1152,7 @@ pub fn write_sequence(path: &str, moves: &[u8]) {
 
 /// Replay a sequence from scratch and return its length if it is legal and finished.
 pub fn verify(moves: &[u8]) -> Option<u16> {
-    let mut b = Board::new();
+    let mut b = Board::start();
     for &m in moves {
         b.play(m as usize)?;
     }

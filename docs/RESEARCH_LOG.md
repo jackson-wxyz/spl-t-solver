@@ -23,10 +23,13 @@ worked, what didn't, and what I'd do next. Read [README.md](../README.md) and
   before that the record was 1277 (Jonathon Becker / @mangosquash, by hand, 2022). Nothing
   from this solver has been played on the real game yet; `tools/replay.html` exists for
   that.
-- **Best game: 3012** (session 5). The ratchet (re-search the tail of the best games
+- **Best game: 3103** (session 6). The ratchet (re-search the tail of the best games
   with fresh seeds and varied settings) took a 2064 game to 2670; iterated local search
   with guided rollouts (kick the game, follow its own schedule to complete it, polish)
-  took that past 3,000 in under an hour. See "Session 5".
+  took that to 3012 in under an hour (session 5); making those rollouts keep off the
+  blocks the game is about to split when they leave its schedule added 91 more in eleven
+  minutes. See "Session 5" and "Session 6", which also explains how a pipe works and why
+  the fourth one is the next target.
 - **The bottleneck was the evaluation function, not compute.** Session 1 proved it (beam
   widths 50-4000 from move 900 of the 1208 game all died at 1035-1077); session 2 fixed it.
 
@@ -187,12 +190,17 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   children) far better than the engine itself. The engine is branchy, with irregular
   per-board loops.
 
-## Resume here (session 5, 2026-11-10: local search running)
+## Resume here (session 6, 2026-11-10 midday: local search running with the off-guide rule)
 
-- **Best verified game: 3012** (`runs/best/game_3012.txt`; hand-replay data next to it as `.json`).
-  Found by `ils` (kick + guided polish, see "Session 5"). `replay` checks it from move one.
-- **Running / queue**: two local-search workers on the main line (`runs/ratchet/ils_a`, `ils_b`, started 04:16 for 8 h, reading each other's best game every 200 iterations), then `95-lineages-later.jobs` (the same search on games from other openings: `lin_nc60` 3 h, `lin_std2` 2 h). `python -I tools/queue/summary.py` shows every run;
-  `touch runs/queue/STOP` stops the workers after their current job.
+- **Best verified game: 3103** (`runs/best/game_3103.txt`; hand-replay data next to it as `.json`).
+  Found by `ils --gres 12` (see "Session 6"). Checked by `replay`, by the engine's slow
+  reference build, and by Josh Holder's Python emulator (`tools/analysis/pyreplay.py`).
+- **Running / queue** (two workers, six threads each): worker B runs
+  `runs/ratchet/ils_h` (main line, `--gres 24`, until about 17:30). Worker A runs
+  `lin_nc60` (another opening) until about 13:20, then `ils_i` (main line, 5 h, look-ahead
+  drawn from 6, 12, 24, 40). `lin_std2` (another opening, 2 h) is last. `python -I tools/queue/summary.py` shows every run; `touch runs/queue/STOP` stops
+  the workers after their current job. A worker is started with PowerShell:
+  `Start-Process -FilePath 'C:\Program Files\Git\bin\bash.exe' -ArgumentList 'tools/queue/runner.sh B 6' -WorkingDirectory <repo> -WindowStyle Hidden`.
 - **To finalize after a run**: `bash tools/queue/finalize.sh` (verifies the longest game on
   disk, copies it to `runs/best/`, exports the replay JSON, rebuilds `tools/viz/data.js`),
   then republish `tools/viz/index.html` (artifact
@@ -203,9 +211,168 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
 - **Before a real-game replay**: run `refills` on the game. It lists every refill situation
   the game relies on; the ones the published record games never exercised are where the
   emulator could differ from the real game (see "Session 5", last bullet of "Findings").
+- **Next research target**: a fourth pipe that keeps cycling from about move 2,400.
+  "Session 6" explains why the local search cannot get there by itself, shows that it
+  cannot even keep one that is handed to it (`whatif`), and lists two ways to build it.
 - Public best to beat: 1910 (ryederek, Bluesky, 2026-03-20).
 - Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true, purely
   technical). Video plan: Asana card "SPL-T world-record video".
+
+## Session 6 (2026-11-10 midday, desktop, Claude Fable 5.2): the fourth pipe, 3012 to 3103
+
+Jackson's instruction: go after the fourth pipe (session 5's "obvious next target"). The
+two workers left on the 3012 game had found one more game (3030) in six hours and 34,000
+iterations, so the old search was finished there.
+
+### What changed
+
+- **Off-guide rule for guided rollouts** (`--gres N`, `rollout_beam::off_guide_move`).
+  When the game being followed has no playable move for the turn, the rollout used to take
+  the heuristic's first choice. That often split a block the game was about to split a few
+  moves later, which then derailed the schedule of a pipe that was running fine. Now it
+  takes the heuristic's best move on a block that none of the game's next N moves touches
+  (in practice: a block in the pipe the schedule does not describe), failing that a later
+  move of the game that can be played early, failing that the heuristic's choice. This is
+  the change that produced the new record.
+- **`pipewatch`**: cluster values per pipe along a game, free capacity and point area per
+  pipe, and per window of moves how often each pipe exploded, how many splits it received,
+  the refill capacity, and how many moves broke a pipe. `--render M` prints a board.
+- **`pipes::breaks_pipe`**: does a move make a plug (a new cluster underneath a point
+  block that has already been halved) or a burial (a new cluster on top of free blocks)?
+  **`pipes::health`**: a score for how well a pipe is set up to keep cycling.
+- **Clean-pipe rule** (`--clean M --cleanfrom T`): the beam, the kick and every rollout
+  refuse plugs (bit 0) and burials (bit 1) from move T while another move exists.
+  `--fclean` applies it to off-guide moves only.
+- **`whatif`** and `--startboard FILE` (`ils`, `rbeam`): take a game at move M, replace one
+  pipe by a stack of clusters of your choosing, and run the search from that constructed
+  position. Not a legal game; a way to measure what a different middle game would be worth
+  before trying to build it. (`Board::start`, `set_start`, `from_parts`, `to_text`.)
+- Smaller options, all measured and none adopted as a default: `--gkid` (a guided beam
+  always expands the game's own move), `--kfree N` (also expands, and kicks on, blocks the
+  game leaves alone), `--whealth X --hpipe P --stopat T` (beam bonus for a healthy pipe,
+  stop at move T and return the best-scoring line), `ils --gresl a,b,c` (draw the
+  look-ahead per iteration).
+
+### Results
+
+- **3012 to 3044 in one 7-second guided beam** from move 2300 of the 3012 game with
+  `--gres 12`. Eight seeds gave 3032 to 3078 (mean 3051); without the rule the same beam
+  returns 3012. Look-aheads from 4 to 40 moves all work (3021 to 3066, one seed each).
+- **`ils --gres 12`**: 3046, 3069, 3090 in the first 139 seconds and **3103** after 11
+  minutes (`runs/ratchet/ils_g12`). All three checks pass on the 3103 game (capacity
+  accounting: 3103 = 127 + 3156 refilled - 180 lost to clusters - 0 left).
+- **Then it stalled again.** On the 3103 game, 80 paired kick-and-polish attempts gave no
+  gain, and guided beams from move 2300 with all legal moves as children, look-aheads of 6
+  to 32, or width 400 returned 3103 every time. Two workers continue on it.
+- What the new games do differently is in pipe 0, the one the three-pipe cycle does not
+  use. It still is not a working pipe. The search arranges its leftover clusters so that
+  several explode within a move or two of each other (three around move 2812, two around
+  2946),
+  each time handing back a large free area exactly when the three working pipes fall short.
+
+### Findings: how a pipe works, and why the fourth one dies
+
+These come from reading games with `pipewatch` and from the engine's rules. The examples
+are from the 3012 game.
+
+- **A pipe is a delay line.** Each explosion at the bottom halves everything above, so a
+  stack of L clusters whose top is worth the split count n settles at one explosion every
+  n / (2^L - 1) moves: n/255 for eight clusters (the full height of the board), n/127 for
+  seven. In the games the eight-deep figure is about n/265, as in session 5: halving
+  rounds down and a cluster takes a few moves to make. Between explosions the pipe must be
+  given exactly one new cluster. The time
+  between two explosions at the bottom is the gap between the two clusters' values when
+  the upper one was made, divided by 2 for every explosion since.
+- **Supply and demand.** Every move spends one split and an exploding cluster returns three
+  (a 2x2 refill), or seven per two clusters when two pipes explode together (a 4x2 refill).
+  With eight-deep pipes exploding every T = n/265 moves, the splits returned per T are: 10
+  for a unison pair plus one single pipe, 13 with a second single pipe, 14 for two pairs.
+  The game needs T per T. So three pipes carry the game to about n = 2,650, four pipes with
+  one pair to about 3,450, two pairs to about 3,700. A seven-deep fourth pipe adds 1.5 per
+  T (about 3,050). After the balance point the game lives on stored capacity, which in
+  these games lasts roughly another 15 percent. That is why the 3012 game ends where
+  it does: pipes 1 and 2 are a pair, pipe 3 is a single, pipe 0 is not working.
+- **A pipe can lose depth easily and regain it only by a trick.** Miss one cluster and
+  the pipe is one level shallower from then on, with twice the period. Making two clusters
+  in one interval does not repair it: their values differ by a few moves, the difference
+  halves with every explosion below, and they arrive at the bottom equal and explode as
+  one event. The exception is a pair that arrives exactly one apart: the upper one falls
+  with value 1, the rule "1 stays 1" keeps it at 1, and it explodes on the next move. That
+  is two events, and everything above has been halved twice. Pipe 2 does this at moves
+  2182/2183 (clusters worth 39 and 40 at move 2160). Pipe 3 goes from six clusters to
+  eight between moves 2360 and 2600 the same way: two clusters made six moves apart near
+  move 2445 (so worth 12 apart) stay distinct all the way down (1214/1208, 601/598,
+  289/287, 132/131, 53/52, 13/12, 3/2). Whether a pair survives is decided by the low bits of its value when it is
+  made, so it can be planned; the search found these by selection.
+- **Why pipe 0 dies.** From move 2400 the pair and pipe 3 return 10 splits per period and
+  the period is about 10, so they use every move. Pipe 0 cannot be kept eight deep as
+  well: four pipes would return 13 per 10 moves and only 10 can be spent. The games resolve
+  this by using pipe 0 as a store: its free blocks get buried under clusters and are later
+  split where they lie, which makes plugs (after move 2400 the 3012 game makes three plugs,
+  all in pipe 0, and four burials, three of them in pipe 0). By move 2760 its bottom cluster is worth 557. The moves
+  it receives per 100 are 12, 11, 0, 4, 8, 9 from move 2400 on, against the 15 a
+  seven-deep pipe would need, and during the exact ten-move cycle (2600 to 2740) it gets
+  none at all.
+- **A single pipe cannot be throttled, a pair can.** A 2x2 refill can only become a
+  cluster with three splits. A pair's 4x2 refill can become two clusters with seven splits
+  or one wide cluster (four 2x1 blocks) with three. A wide level explodes like any other
+  and the refill is again 4x2, so a pair can shed four splits in any period without losing
+  depth. That is the mechanism that would make room for a fourth pipe before move 3,450:
+  about four wide levels per 100 moves during the ten-move cycle (a seven-deep pipe 0
+  needs 15 moves per 100). No game so far uses it
+  (capacity lost to clusters is 180 splits in 3,103 moves, nearly all of it early). Note
+  that a wide cluster does not tie two pipes together: each 2x1 block spans one pipe and
+  falls with it. Only blocks four wide do that, and those exist only where two pipes
+  already fell on the same move. All of this is deduced from the rules; no wide level has
+  been tried in a search yet.
+- **The plain fix does not work.** Forbidding plugs from move 2300 or 2380 (`--clean 1`)
+  turns the guided search's 3012 into 2581 to 2641, with or without the off-guide rule, and
+  forbidding burials too gives 2499 to 2532. Heuristic beams from cuts near move 2350 reach
+  about 2,530 whether the rule is on or not (six paired attempts: +12 +/- 15 and +10 +/- 14
+  moves). The store moves are what keeps the three-pipe cycle fed between moves 2450 and
+  2600, when pipe 3 is still rebuilding its depth. A local search started in the clean
+  space climbed 2591 to 2644 in seven minutes (`runs/ratchet/p4_c1k0`) and was stopped
+  there.
+- **What a working fourth pipe is worth to this search (`whatif`).** The 3103 game at move
+  2750 with pipe 0 replaced by a clean staircase of six clusters (22, 65, 151, 324, 670,
+  1361) under two free blocks, then the same local search from that position and from the
+  unchanged one. The unchanged position stayed at 3103 (18 minutes, two threads). The
+  constructed one started at 3019 (the old schedule knows nothing about the new pipe),
+  passed 3103 after three and a half minutes, reached 3127 after nine, and found nothing
+  in 16 more minutes on six threads. `pipewatch` shows why: the new pipe explodes on
+  schedule for about 150 moves (two or three times per 50 moves), but the search plugs and
+  buries it from the first 50 moves on, and by move 3060 its bottom cluster is worth 695.
+  The same run with plugs forbidden from move 2750 reached 3057, with burials forbidden too
+  3090, and with the rule applied to off-guide moves only 3125 (18 minutes, two threads
+  each). So handing this search a working fourth pipe is worth about 25 moves. It cannot
+  run one, with or without the rules: the pipe needs a schedule of its own (one cluster per
+  explosion, on top of the stack), and room has to be made for its splits. An eight-deep
+  version at move 2750 (5, 27, 70, ...) started at 3019 and went nowhere in 18 minutes, and
+  the seven-deep construction at move 2600 was still short of the unchanged game after
+  nine minutes (3011 and 3046 for two phases of the new pipe) when it was stopped.
+- **Other nulls.** The clean rule for off-guide moves only: 3022, 3077, 3022 against 3044,
+  3055, 3078. Trying a later move of the game before a free block: 3012 seven times out of
+  eight. `--gkid`, `--kfree 3`, both, and `--kfree 8`: means 3057, 3055, 3048, 3060 against
+  3051 over eight seeds (noise is about 15 per run). Kicks restricted to free blocks: -5
+  +/- 7 against ordinary kicks, no gain from either. A beam that scores pipe 0's health
+  (weights 5 to 40, stopped at move 2750) returns the game unchanged: during the ten-move
+  cycle there are no spare moves for pipe 0, so no line in the beam keeps it healthy.
+
+### Two ways to build the fourth pipe (not done)
+
+1. **A scripted schedule.** From about move 2360 follow the game for pipes 1 to 3, give
+   pipe 0 one cluster per explosion on top of its stack, and make the pair's level wide
+   whenever pipe 0 is waiting for moves. The pieces exist (time-aligned follower, off-guide
+   rule, `breaks_pipe`); what is missing is the trigger for a wide level, which takes two
+   H turns with the blocks left alone in between, so the plain follower cannot find it.
+   The `whatif` runs say the search will not keep such a pipe alive afterwards, so the
+   rule for pipe 0 has to stay in force to the end of the game, in the rollouts too, and
+   `ils` can only be trusted with the other three pipes.
+2. **Two pairs from the opening.** Treat the board as two pipes four wide. Each level is
+   wide (three splits) or two ordinary clusters (seven), both halves made in the same
+   interval, so each pair is in unison by construction and can be throttled at any n. The
+   two pairs should explode at different times: with all four in unison every interval
+   would need exactly 3, 7, 11 or 15 splits, and there is no slack.
 
 ## Session 5 (2026-11-10, desktop, Claude Fable 5.2): guided local search, 2670 to 3012
 

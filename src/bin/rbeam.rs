@@ -12,11 +12,20 @@
 //! --maxkids  at most M children of one parent survive each selection (beam diversity)
 //! --rankpen  score penalty per heuristic rank below first (prefer the heuristic in ties)
 //! --tree     dump the beam genealogy (parent index and rollout length of every kept node)
+//!
+//! Guided search (session 5-6): `--prefix GAME --keep N --guide 1 --policy none` re-searches
+//! GAME from move N with rollouts that follow GAME itself. `--gres 12` makes those rollouts
+//! keep off the blocks GAME is about to split when they have to leave its schedule (the
+//! setting behind the 3103 game). Experimental: `--clean M --cleanfrom T` (refuse moves that
+//! plug a pipe or bury free blocks), `--fclean M`, `--gkid 1`, `--kfree N`,
+//! `--whealth X --hpipe P --stopat T`, `--startboard FILE` (see `whatif`). All are described
+//! at their fields in `rollout_beam::Config`.
 use splt::engine::parse_moves;
 use splt::rollout_beam::{arg, guide_of, run, write_sequence, Config};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    splt::rollout_beam::load_start(&args);
     let mut cfg = Config::from_args(&args);
     let out: String = arg(&args, "--out").unwrap_or_else(|| "runs".to_string());
     let quiet = args.iter().any(|a| a == "--quiet");

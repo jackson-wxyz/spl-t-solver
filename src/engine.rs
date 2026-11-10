@@ -78,6 +78,8 @@ pub struct Board {
     dirty_groups: bool,
 }
 
+static START: std::sync::OnceLock<Board> = std::sync::OnceLock::new();
+
 impl Default for Board {
     fn default() -> Self {
         Self::new()
@@ -89,6 +91,49 @@ impl Board {
         let mut b = Board { blocks: [Block::default(); MAXB], grid: [0; CELLS], len: 1, moves: 0, next_expl: 0, dirty_groups: false };
         b.blocks[0] = Block { x: 0, y: 0, w: W as u8, h: H as u8, pts: 0 };
         b
+    }
+
+    /// The position games start from: the empty board, unless `set_start` replaced it. Only
+    /// what-if experiments replace it (`whatif`: the search machinery run from a constructed
+    /// position, to measure what a different middle game would be worth).
+    pub fn start() -> Board {
+        START.get().cloned().unwrap_or_else(Board::new)
+    }
+
+    /// Make `b` the position that `start` returns, for the rest of the process.
+    pub fn set_start(b: Board) {
+        START.set(b).ok();
+    }
+
+    /// A board with exactly these blocks (in this order) after `moves` splits. The caller is
+    /// responsible for the blocks tiling the board sensibly; `check_invariants` tells.
+    pub fn from_parts(blocks: &[Block], moves: u16) -> Board {
+        let mut b = Board { blocks: [Block::default(); MAXB], grid: [EMPTY; CELLS], len: blocks.len() as u8, moves, next_expl: 0, dirty_groups: false };
+        b.blocks[..blocks.len()].copy_from_slice(blocks);
+        b.repaint();
+        b.next_expl = blocks.iter().filter(|x| x.pts > 0).map(|x| x.pts).min().unwrap_or(0);
+        b
+    }
+
+    /// One line "moves" and one line "x y w h pts" per block; `from_text` reads it back.
+    pub fn to_text(&self) -> String {
+        let mut s = format!("{}\n", self.moves);
+        for bl in self.blocks() {
+            s.push_str(&format!("{} {} {} {} {}\n", bl.x, bl.y, bl.w, bl.h, bl.pts));
+        }
+        s
+    }
+
+    pub fn from_text(text: &str) -> Board {
+        let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+        let moves: u16 = lines.next().expect("board text: moves line").trim().parse().expect("board text: moves");
+        let blocks: Vec<Block> = lines
+            .map(|l| {
+                let v: Vec<u16> = l.split_whitespace().map(|x| x.parse().expect("board text: number")).collect();
+                Block { x: v[0] as u8, y: v[1] as u8, w: v[2] as u8, h: v[3] as u8, pts: v[4] }
+            })
+            .collect();
+        Board::from_parts(&blocks, moves)
     }
 
     /// The first split is horizontal (cuts a block into top and bottom halves); then the

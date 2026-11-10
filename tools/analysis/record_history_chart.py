@@ -24,7 +24,7 @@ recs = [
     (2026.19, 1396, 'ryederek', UNK),
     (2026.22, 1910, 'ryederek', UNK),
 ]
-SOLVER = (2026.86, 3012)
+SOLVER = (2026.86, 3103)
 
 plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 11})
 fig, ax = plt.subplots(figsize=(9, 5.4), dpi=220)

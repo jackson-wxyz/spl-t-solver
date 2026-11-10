@@ -4,7 +4,7 @@ An attempt to find very long games of Simogo's *SPL-T* (2015). The score is the 
 splits made before no split is possible. Goal: understand what optimal play looks like and,
 ideally, beat the world record.
 
-## Status (2026-11-10, session 5)
+## Status (2026-11-10, session 6)
 
 | | splits |
 |---|---|
@@ -16,7 +16,8 @@ ideally, beat the world record.
 | Rollout beam, from scratch (`rbeam`, width 100, k 4, cap 200, seed 3, ~40 s on the desktop) | 1885 (`runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt`) |
 | Rollout beam, from scratch, two stochastic rollouts per child (width 100, k 4, cap 200, `--stoch 2`, seed 1, ~100 s) | 2064 (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`) |
 | Ratchet from the 2064 game (re-search the best games' tails with fresh seeds and varied settings; about a day of search) | 2670 (`runs/best/ratchet_2670.txt`) |
-| **Iterated local search** from the 2670 game (`ils`: kick the game, complete it by following its own schedule, polish with guided search; first hours) | **3012** (`runs/best/game_3012.txt`; hand-replay data `runs/best/game_3012.json`) |
+| Iterated local search from the 2670 game (`ils`: kick the game, complete it by following its own schedule, polish with guided search; first hours) | 3012 (`runs/best/game_3012.txt`) |
+| **The same local search with the off-guide rule** (`--gres 12`: a rollout that has to leave the game's schedule keeps off the blocks the game is about to split; 11 minutes from the 3012 game) | **3103** (`runs/best/game_3103.txt`; hand-replay data `runs/best/game_3103.json`) |
 | Rollout beam resuming Josh Holder's 1208 game at move 700 | 1984 (`runs/best/from_josh1208_at700_1984_rbeam_w100_k4_r300.txt`) |
 
 The engine replays all four published record games move for move, and every sequence in
@@ -70,13 +71,20 @@ Of the approaches considered, existing open-source code turned out to be the rig
 - `src/heuristic.rs` - faithful Rust port of Josh Holder's move-scoring heuristic
   (`weighting.py`), checked weight-for-weight against his Python at all 4,590 record
   positions. Also the rollout policies built on it (greedy, avoid-big, softmax-sampled).
-- `src/pipes.rs` - pipe-level structure (cluster values per 2-column pipe, "twins" count).
+- `src/pipes.rs` - pipe-level structure (cluster values per 2-column pipe, "twins" count,
+  whether a move plugs a pipe or buries free blocks, a health score for a pipe).
 - `src/bin/ils.rs` - **the current best solver**: iterated local search on finished games.
   Each step kicks a game (plays a different move somewhere in its last few hundred moves and
   completes it by following the original), then polishes the result with a guided beam
   (rollouts replay the game's own moves wherever the same block still exists), and keeps
-  it if it is longer. A step takes about a second. See `docs/RESEARCH_LOG.md`, "Session 5".
+  it if it is longer. A step takes about a second. See `docs/RESEARCH_LOG.md`, "Session 5"
+  and, for `--gres` (what a rollout does when it has to leave the schedule), "Session 6".
 - `src/bin/abtest.rs` - paired comparison of search settings on tail re-search attempts.
+- `src/bin/pipewatch.rs` - what each of the four pipes is doing along a game: cluster
+  values, free capacity, explosions and splits per pipe, and the moves that wreck a pipe.
+- `src/bin/whatif.rs` - replace one pipe of a position by a stack of your choosing and run
+  the search from there (`ils --startboard`), to measure what a different middle game would
+  be worth. The result is a measurement, not a legal game.
 - `src/bin/doom.rs`, `nbhd.rs`, `polcmp.rs`, `opening.rs`, `refills.rs` - analysis tools:
   the capacity bound against moves actually left; the single-deviation neighbourhood of a
   game; play-out policies compared by survival; opening statistics; which refill situations
@@ -127,7 +135,8 @@ Run these from the project folder. Requires Rust (`rustup`).
 ```
 cargo build --release
 cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 200 --seed 3
-cargo run --release --bin ils -- --start runs/best/game_3012.txt --hours 1 --beam 0.05 --out runs/ratchet/try
+cargo run --release --bin ils -- --start runs/best/game_3103.txt --hours 1 --beam 0.05 --gres 12 --out runs/ratchet/try
+cargo run --release --bin pipewatch -- runs/best/game_3103.txt --from 2300 --every 40
 cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 300 --prefix reference/josh-holder-SPLT/sequences/1208seq.txt --keep 700
 cargo run --release --bin replay -- runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt --final
 cargo run --release --bin paranoid -- --secs 60
