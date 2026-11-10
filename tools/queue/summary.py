@@ -32,3 +32,12 @@ for logp in sorted(glob.glob('runs/ratchet/*/ratchet.log')):
         print('%s: %d iterations, best %s; last: %s' % (os.path.dirname(logp), len(lines), best, last.strip()[:110]))
     for l in nb[-5:]:
         print('   ' + l)
+for logp in sorted(glob.glob('runs/ratchet/*/ils.log')):
+    stat = [l for l in open(logp) if l.startswith('STAT')]
+    nb = [l.strip() for l in open(logp) if l.startswith('NEWBEST')]
+    gains = sum(1 for l in open(logp) if l.startswith('ILS') and 'GAIN' in l)
+    if stat:
+        m = re.search(r'STAT iter (\d+) .*best (\d+) pool=\[([^\]]*)\] total (\d+)s', stat[-1])
+        print('%s: local search, %s iterations in %.1f h, %d gains, best %s, pool [%s]' % (os.path.dirname(logp), m.group(1), int(m.group(4)) / 3600, gains, m.group(2), m.group(3)))
+    for l in nb[-5:]:
+        print('   ' + l)

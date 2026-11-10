@@ -9,7 +9,7 @@
 //! how often the result ties or beats the parent, the mean gain over the parent (0 when
 //! shorter), mean seconds, and the paired difference to the first arm with its standard error.
 use splt::engine::parse_moves;
-use splt::rollout_beam::{arg, guide_of, run, verify, Config};
+use splt::rollout_beam::{arg, guide_of, kick, polish, run, verify, Config, Outcome};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -26,7 +26,10 @@ fn main() {
     let min_back: usize = arg(&args, "--minback").unwrap_or(120);
     let max_back: usize = arg(&args, "--maxback").unwrap_or(400);
     let seed0: u64 = arg(&args, "--seed0").unwrap_or(77_000_001);
-    let arms: Vec<(String, Config)> = args
+    // Per arm: (label, config, polish rounds, polish width, moves before the cut to polish
+    // from, kick?). A kick arm (--kick 1) does not run a beam from the cut: it plays a
+    // different move at the cut, completes the game by following the parent, and polishes.
+    let arms: Vec<(String, Config, usize, usize, usize, bool)> = args
         .iter()
         .enumerate()
         .filter(|(_, a)| *a == "--arm")
@@ -35,7 +38,7 @@ fn main() {
             let (label, flags) = spec.split_once('|').expect("--arm \"label|flags\"");
             let mut fl: Vec<String> = vec!["abtest".to_string()];
             fl.extend(flags.split_whitespace().map(|s| s.to_string()));
-            (label.trim().to_string(), Config::from_args(&fl))
+            (label.trim().to_string(), Config::from_args(&fl), arg(&fl, "--polish").unwrap_or(0), arg(&fl, "--pwidth").unwrap_or(100), arg(&fl, "--pextra").unwrap_or(0), arg::<u8>(&fl, "--kick").unwrap_or(0) != 0)
         })
         .collect();
     assert!(!arms.is_empty(), "need at least one --arm");
@@ -58,13 +61,32 @@ fn main() {
         let cut = plen - back;
         let seed = seed0 + i as u64;
         let mut line = format!("ATTEMPT {i} parent {plen} back {back} seed {seed}:");
-        for (a, (label, base)) in arms.iter().enumerate() {
+        for (a, (label, base, rounds, pwidth, pextra, kicked)) in arms.iter().enumerate() {
             let guide = base.guided.then(|| guide_of(parent));
             let cfg = Config { seed, noise: if base.noise > 0.0 { base.noise } else { 0.5 }, guide, ..base.clone() };
-            let o = run(&parent[..cut], &cfg, None, false);
+            if *kicked {
+                let t0 = std::time::Instant::now();
+                let res = match kick(parent, cut, seed, 4, &cfg) {
+                    Some(k) => polish(&k, cut + 1, &Config { width: *pwidth, ..cfg.clone() }, (*rounds).max(1), seed).moves,
+                    None => parent.clone(),
+                };
+                assert!(verify(&res).is_some());
+                diffs[a].push(res.len() as f64 - plen as f64);
+                secs[a].push(t0.elapsed().as_secs_f64());
+                line.push_str(&format!(" {label} {} ({:.1}s)", res.len(), t0.elapsed().as_secs_f64()));
+                continue;
+            }
+            let mut o: Outcome = run(&parent[..cut], &cfg, None, false);
+            let mut t = o.secs;
+            if *rounds > 0 {
+                let pc = Config { width: *pwidth, ..cfg.clone() };
+                o = polish(&o.moves, cut.saturating_sub(*pextra), &pc, *rounds, seed);
+                t += o.secs;
+                assert_eq!(verify(&o.moves), Some(o.splits));
+            }
             diffs[a].push(o.splits as f64 - plen as f64);
-            secs[a].push(o.secs);
-            line.push_str(&format!(" {label} {} ({:.1}s)", o.splits, o.secs));
+            secs[a].push(t);
+            line.push_str(&format!(" {label} {} ({:.1}s)", o.splits, t));
         }
         println!("{line}");
     }
@@ -74,7 +96,7 @@ fn main() {
         (v.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (v.len() as f64 - 1.0).max(1.0)).sqrt()
     };
     println!("\n{:<28} {:>8} {:>7} {:>6} {:>6} {:>8} {:>7} {:>16}", "arm", "mean", "sd", "tie+", "gain", "gain+", "secs", "vs first (se)");
-    for (a, (label, _)) in arms.iter().enumerate() {
+    for (a, (label, ..)) in arms.iter().enumerate() {
         let d = &diffs[a];
         let ties = d.iter().filter(|&&x| x >= 0.0).count() as f64 / d.len() as f64;
         let gains = d.iter().filter(|&&x| x > 0.0).count() as f64 / d.len() as f64;

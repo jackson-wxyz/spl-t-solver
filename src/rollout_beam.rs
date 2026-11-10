@@ -59,6 +59,8 @@ pub struct Config {
     /// moves back in the guide (same split direction) for a move that still is, before
     /// falling back to the heuristic. That replays a guide move the path skipped earlier.
     pub gscan: usize,
+    /// Reuse the endings of guided rollouts by position (`EndCache`). On by default.
+    pub gcache: bool,
     /// `--guide 1`: the caller should set `guide` to the game being re-searched.
     pub guided: bool,
     /// Guide game for guided rollouts (see `play_out_guided`), as the geometry of the block
@@ -110,27 +112,227 @@ fn guide_at(b: &Board, guide: &[[u8; 4]], t: usize) -> Option<usize> {
     (bl.x == x && bl.y == y && bl.w == w && bl.h == h && b.can_split(id as usize)).then_some(id as usize)
 }
 
-/// Guided rollout: play the guide game's move whenever the same block exists, the
-/// heuristic's choice otherwise, until the game ends. From a position on the guide game this
-/// replays the rest of it; from a position that deviated it tests whether the deviation can
-/// rejoin the guide's schedule and what that does to the ending. Returns moves played.
-fn play_out_guided(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams, record: Option<&mut Vec<u8>>) -> usize {
-    let mut n = 0usize;
+/// Which of the guide's moves a line of play has already made, for the to-do follower: bit j
+/// of `mask` stands for guide move `base + j`; moves before `base` count as done or dropped.
+///
+/// The plain follower plays the guide's move for the current split count or nothing. That is
+/// brittle: if one refill arrives two moves late, the guide's move for it is not there on
+/// time and never comes up again. The to-do follower treats the guide as an ordered list
+/// instead: play the earliest guide move (of the current split direction) that has not been
+/// made yet and whose block exists now. A late block's move is simply made when the block
+/// turns up, and moves whose turn has not come can be made early in its place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Todo {
+    pub base: u32,
+    pub mask: u128,
+}
+
+pub const TODO_BEHIND: usize = 40;
+
+impl Todo {
+    /// State of a line that has followed the guide exactly for its first `t` moves.
+    pub fn at(t: usize) -> Todo {
+        let base = t.saturating_sub(TODO_BEHIND);
+        let done = t - base;
+        Todo { base: base as u32, mask: if done == 0 { 0 } else { (1u128 << done) - 1 } }
+    }
+    /// Drop moves that have been pending for more than TODO_BEHIND moves.
+    #[inline]
+    fn advance(&mut self, t: usize) {
+        let nb = t.saturating_sub(TODO_BEHIND);
+        if nb > self.base as usize {
+            let sh = nb - self.base as usize;
+            self.mask = if sh >= 128 { 0 } else { self.mask >> sh };
+            self.base = nb as u32;
+        }
+    }
+    #[inline]
+    fn used(&self, i: usize) -> bool {
+        let j = i - self.base as usize;
+        j < 128 && self.mask >> j & 1 == 1
+    }
+    #[inline]
+    fn mark(&mut self, i: usize) {
+        let j = i - self.base as usize;
+        if j < 128 {
+            self.mask |= 1u128 << j;
+        }
+    }
+    /// First index >= base with the parity of `t`.
+    #[inline]
+    fn first(&self, t: usize) -> usize {
+        let b = self.base as usize;
+        if (b ^ t) & 1 == 0 { b } else { b + 1 }
+    }
+    /// The earliest pending guide move of the current direction, at most `ahead` moves in
+    /// the future, whose block exists now: (block index, guide index).
+    pub fn next(&mut self, b: &Board, guide: &[[u8; 4]], ahead: usize) -> Option<(usize, usize)> {
+        let t = b.moves as usize;
+        self.advance(t);
+        let end = (t + ahead + 1).min(guide.len()).min(self.base as usize + 128);
+        let mut i = self.first(t);
+        while i < end {
+            if !self.used(i) {
+                if let Some(m) = guide_at(b, guide, i) {
+                    return Some((m, i));
+                }
+            }
+            i += 2;
+        }
+        None
+    }
+    /// Record that block geometry `g` was split at split count `t`: it uses up the earliest
+    /// pending guide move with that geometry, if there is one within `ahead`.
+    pub fn consume(&mut self, g: [u8; 4], t: usize, guide: &[[u8; 4]], ahead: usize) {
+        self.advance(t);
+        let end = (t + ahead + 1).min(guide.len()).min(self.base as usize + 128);
+        let mut i = self.first(t);
+        while i < end {
+            if !self.used(i) && guide[i] == g {
+                self.mark(i);
+                return;
+            }
+            i += 2;
+        }
+    }
+    fn key(&self) -> u64 {
+        mix(self.base as u64 ^ (self.mask as u64).rotate_left(17) ^ ((self.mask >> 64) as u64).rotate_left(41))
+    }
+}
+
+/// To-do-list guided rollout (see `Todo`): the earliest pending guide move that is playable,
+/// else the heuristic's choice, until the game ends. Returns (moves played, from cache?).
+pub fn play_out_todo(b: &mut Board, guide: &[[u8; 4]], mut st: Todo, ahead: usize, hp: &HParams, record: Option<&mut Vec<u8>>, cache: Option<&EndCache>) -> (usize, bool) {
+    let start = b.moves;
     let mut rec = record;
-    loop {
-        let m = match guided_move(b, guide, scan) {
-            Some(m) => m,
+    let mut seen: Vec<u64> = Vec::new();
+    let (end, hit) = loop {
+        if let Some(c) = cache {
+            st.advance(b.moves as usize);
+            let h = b.hash64() ^ st.key();
+            if let Some(end) = c.get(h) {
+                break (end, true);
+            }
+            seen.push(h);
+        }
+        let m = match st.next(b, guide, ahead) {
+            Some((m, i)) => {
+                st.mark(i);
+                m
+            }
             None => match choose_hp(b, Policy::Greedy, hp) {
-                Some(m) => m,
-                None => return n,
+                Some(m) => {
+                    let bl = b.blocks[m];
+                    st.consume([bl.x, bl.y, bl.w, bl.h], b.moves as usize, guide, ahead);
+                    m
+                }
+                None => break (b.moves, false),
             },
         };
         b.play(m).unwrap();
         if let Some(r) = rec.as_mut() {
             r.push(m as u8);
         }
-        n += 1;
+    };
+    if let Some(c) = cache {
+        c.put_all(&seen, end);
     }
+    ((end - start) as usize, hit)
+}
+
+/// Time-aligned guided rollout without a cache, for analysis tools. Returns moves played.
+pub fn play_out_aligned(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams) -> usize {
+    play_out_guided(b, guide, scan, hp, None, None).0
+}
+
+/// Where guided rollouts end, by position: hash of a position -> split count at which the
+/// guided rollout through it ended. A deviation that rejoins the guide (for example by
+/// playing two of its moves in the other order) reaches a position some earlier rollout has
+/// already played out, and can stop there. Values are exact up to one thing: the heuristic
+/// breaks exact weight ties by block index, and the same position can be reached with its
+/// blocks listed in a different order. So a cached ending that would be a new best game is
+/// always replayed before it is believed (see `rollout`).
+pub struct EndCache {
+    shards: Vec<std::sync::Mutex<std::collections::HashMap<u64, u16, std::hash::BuildHasherDefault<IdHasher>>>>,
+}
+
+/// Position hashes are already well mixed.
+#[derive(Default)]
+pub struct IdHasher(u64);
+
+impl std::hash::Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, _: &[u8]) {
+        unreachable!()
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = v;
+    }
+}
+
+const SHARDS: usize = 256;
+const SHARD_MAX: usize = 40_000;
+
+impl EndCache {
+    pub fn new() -> Self {
+        EndCache { shards: (0..SHARDS).map(|_| Default::default()).collect() }
+    }
+    #[inline]
+    fn get(&self, h: u64) -> Option<u16> {
+        self.shards[(h >> 56) as usize % SHARDS].lock().unwrap().get(&h).copied()
+    }
+    fn put_all(&self, hs: &[u64], end: u16) {
+        for &h in hs {
+            let mut m = self.shards[(h >> 56) as usize % SHARDS].lock().unwrap();
+            if m.len() >= SHARD_MAX {
+                m.clear();
+            }
+            m.insert(h, end);
+        }
+    }
+}
+
+impl Default for EndCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Guided rollout: play the guide game's move whenever the same block exists, the
+/// heuristic's choice otherwise, until the game ends. From a position on the guide game this
+/// replays the rest of it; from a position that deviated it tests whether the deviation can
+/// rejoin the guide's schedule and what that does to the ending. Returns (moves played,
+/// whether the ending came from `cache`; the board is then not the end position).
+fn play_out_guided(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams, record: Option<&mut Vec<u8>>, cache: Option<&EndCache>) -> (usize, bool) {
+    let start = b.moves;
+    let mut rec = record;
+    let mut seen: Vec<u64> = Vec::new();
+    let (end, hit) = loop {
+        if let Some(c) = cache {
+            let h = b.hash64();
+            if let Some(end) = c.get(h) {
+                break (end, true);
+            }
+            seen.push(h);
+        }
+        let m = match guided_move(b, guide, scan) {
+            Some(m) => m,
+            None => match choose_hp(b, Policy::Greedy, hp) {
+                Some(m) => m,
+                None => break (b.moves, false),
+            },
+        };
+        b.play(m).unwrap();
+        if let Some(r) = rec.as_mut() {
+            r.push(m as u8);
+        }
+    };
+    if let Some(c) = cache {
+        c.put_all(&seen, end);
+    }
+    ((end - start) as usize, hit)
 }
 
 impl Default for Config {
@@ -157,6 +359,7 @@ impl Default for Config {
             wchain: 0.0,
             nocluster: 0,
             gscan: 0,
+            gcache: true,
             guided: false,
             guide: None,
         }
@@ -195,6 +398,9 @@ impl Config {
             temp: arg(args, "--temp").unwrap_or(d.temp),
             pols: match pol_name.as_str() {
                 "both" => vec![Policy::Greedy, Policy::AvoidBig],
+                // No heuristic rollout: for guided searches, where the guided rollout is the
+                // evaluation (a greedy rollout still runs when there is no guide).
+                "none" => vec![],
                 s => vec![s.parse().expect("policy")],
             },
             wtwin: arg(args, "--wtwin").unwrap_or(d.wtwin),
@@ -209,6 +415,7 @@ impl Config {
             wchain: arg(args, "--wchain").unwrap_or(d.wchain),
             nocluster: arg(args, "--nocluster").unwrap_or(d.nocluster),
             gscan: arg(args, "--gscan").unwrap_or(d.gscan),
+            gcache: arg::<u8>(args, "--gcache").unwrap_or(1) != 0,
             guided: arg::<u8>(args, "--guide").unwrap_or(0) != 0,
             guide: None,
         }
@@ -218,6 +425,7 @@ impl Config {
         match self.pols.as_slice() {
             [Policy::Greedy] => "greedy",
             [Policy::AvoidBig] => "avoidbig",
+            [] => "none",
             _ => "both",
         }
     }
@@ -285,11 +493,15 @@ enum Kind {
 /// Rollout with each deterministic policy plus `stoch` seeded stochastic play-outs; the
 /// longest one counts. Returns (moves played, game over?, final board, kind, value), where
 /// value is the best over the rollouts of length + wchain * capacity chain at the end.
-fn rollout(start: &Board, cfg: &Config, seed0: u64) -> (usize, bool, Board, Kind, f32) {
+///
+/// `cache`, `best_len`: ending cache for the guided rollout and the longest complete game so
+/// far; a cached ending that would beat it is replayed, so every new best is exact.
+fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, best_len: u16) -> (usize, bool, Board, Kind, f32) {
     let mut best: Option<(usize, bool, Board, Kind)> = None;
     let mut value = f32::NEG_INFINITY;
     let mut consider = |n: usize, over: bool, b: Board, kind: Kind| {
-        let v = if cfg.wchain != 0.0 { n as f32 + cfg.wchain * passive_bound(&b, 400).0 as f32 } else { n as f32 };
+        let chain = cfg.wchain != 0.0 && !matches!(kind, Kind::Guided);
+        let v = if chain { n as f32 + cfg.wchain * passive_bound(&b, 400).0 as f32 } else { n as f32 };
         if v > value {
             value = v;
         }
@@ -310,8 +522,17 @@ fn rollout(start: &Board, cfg: &Config, seed0: u64) -> (usize, bool, Board, Kind
     }
     if let Some(g) = &cfg.guide {
         let mut b = start.clone();
-        let n = play_out_guided(&mut b, g, cfg.gscan, &cfg.hp, None);
+        let (mut n, hit) = play_out_guided(&mut b, g, cfg.gscan, &cfg.hp, None, cache);
+        if hit && start.moves as usize + n > best_len as usize {
+            b = start.clone();
+            n = play_out_guided(&mut b, g, cfg.gscan, &cfg.hp, None, None).0;
+        }
         consider(n, true, b, Kind::Guided);
+    }
+    if cfg.pols.is_empty() && cfg.stoch == 0 && cfg.guide.is_none() {
+        let mut b = start.clone();
+        let (n, over) = play_out_hp(&mut b, Policy::Greedy, &cfg.hp, cfg.cap);
+        consider(n, over, b, Kind::Det(Policy::Greedy));
     }
     let (n, over, b, kind) = best.unwrap();
     (n, over, b, kind, value)
@@ -322,7 +543,7 @@ fn replay_kind(b: &mut Board, kind: Kind, cfg: &Config) -> Vec<u8> {
     let mut out = Vec::new();
     match kind {
         Kind::Guided => {
-            play_out_guided(b, cfg.guide.as_ref().expect("guided rollout without a guide"), cfg.gscan, hp, Some(&mut out));
+            play_out_guided(b, cfg.guide.as_ref().expect("guided rollout without a guide"), cfg.gscan, hp, Some(&mut out), None);
         }
         Kind::Det(pol) => {
             while let Some(m) = choose_hp(b, pol, hp) {
@@ -401,6 +622,7 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     let mut best: (u16, usize, u32, Kind) = (start.moves, 0, 0, Kind::Det(Policy::Greedy));
     let mut rollouts: u64 = 0;
     let seed = cfg.seed;
+    let cache = (cfg.guide.is_some() && cfg.gcache).then(EndCache::new);
 
     loop {
         let level = history.len();
@@ -423,6 +645,7 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
         // Same sort as session 2's rbeam, so earlier seeds reproduce their games exactly.
         children.par_sort_unstable_by_key(|c| c.3);
         children.dedup_by_key(|c| c.3);
+        let best_len = best.0;
         let scored: Vec<(u32, u8, f32, u16, bool, Board, Kind)> = children
             .into_par_iter()
             .map(|(pi, m, r, _, c)| {
@@ -430,7 +653,7 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
                     return (pi, m, f32::NEG_INFINITY, c.moves, true, c, Kind::Det(Policy::Greedy));
                 }
                 let seed0 = seed ^ (level as u64) << 40 ^ (pi as u64) << 8 ^ m as u64;
-                let (n, over, end, kind, value) = rollout(&c, cfg, seed0);
+                let (n, over, end, kind, value) = rollout(&c, cfg, seed0, cache.as_ref(), best_len);
                 let reached = c.moves + n as u16;
                 let mut s = value;
                 if !over {
@@ -543,6 +766,59 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     assert!(b.is_over(), "reconstructed game not over");
     assert_eq!(b.moves, splits, "reconstructed game length mismatch");
     Outcome { moves, splits, rollouts, secs: t0.elapsed().as_secs_f64() }
+}
+
+/// Polish a finished game: guided-only beam searches from move `from`, each guided by the
+/// current game, repeated until a round finds nothing longer (at most `rounds` rounds). The
+/// guided beam is a local search: it tries deviations from the game along its whole tail and
+/// keeps the ones whose guided completion is longest, so it never returns a shorter game.
+/// `width`, `gscan` and the heuristic factors come from `cfg`; `seed` varies the tie-breaks.
+pub fn polish(moves: &[u8], from: usize, cfg: &Config, rounds: usize, seed: u64) -> Outcome {
+    let t0 = Instant::now();
+    let mut cur = moves.to_vec();
+    let mut rollouts = 0u64;
+    for r in 0..rounds {
+        let pc = Config {
+            pols: vec![],
+            stoch: 0,
+            guide: Some(guide_of(&cur)),
+            seed: seed.wrapping_add(r as u64),
+            noise: 0.5,
+            wchain: 0.0,
+            nocluster: 0,
+            ..cfg.clone()
+        };
+        let o = run(&cur[..from.min(cur.len())], &pc, None, false);
+        rollouts += o.rollouts;
+        if o.moves.len() <= cur.len() {
+            break;
+        }
+        cur = o.moves;
+    }
+    Outcome { splits: cur.len() as u16, moves: cur, rollouts, secs: t0.elapsed().as_secs_f64() }
+}
+
+/// Kick a finished game: keep its first `t` moves, play a different move there (one of the
+/// heuristic's top `k` other than the game's own, chosen by `pick`), and complete the game
+/// with a guided rollout that follows the original wherever it still can. Returns the new
+/// complete game, or None if the position has no alternative. Most kicks end much sooner
+/// than the original; `polish` from move t + 1 then searches for a repair.
+pub fn kick(moves: &[u8], t: usize, pick: u64, k: usize, cfg: &Config) -> Option<Vec<u8>> {
+    let mut b = Board::new();
+    for &m in &moves[..t] {
+        b.play(m as usize).expect("illegal move");
+    }
+    let alts: Vec<u8> = top_k_moves_hp(&b, k, &cfg.hp).into_iter().filter(|&m| m != moves[t]).collect();
+    if alts.is_empty() {
+        return None;
+    }
+    let alt = alts[(mix(pick) % alts.len() as u64) as usize];
+    let mut out = moves[..t].to_vec();
+    out.push(alt);
+    b.play(alt as usize).unwrap();
+    let guide = guide_of(moves);
+    play_out_guided(&mut b, &guide, cfg.gscan, &cfg.hp, Some(&mut out), None);
+    Some(out)
 }
 
 /// Write a sequence file in the reference format "[a, b, c]".

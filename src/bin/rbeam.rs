@@ -3,7 +3,7 @@
 //! usage: rbeam [--width W] [--k K] [--rollout R] [--seed S] [--stoch N --temp T]
 //!              [--policy greedy|avoidbig|both] [--maxkids M] [--rankpen X]
 //!              [--wtwin X] [--wstuck X --stuckt T] [--wdebt X] [--tie X] [--noise X]
-//!              [--prefix FILE --keep N] [--tree FILE] [--out DIR] [--quiet]
+//!              [--prefix FILE --keep N] [--guide 1] [--tree FILE] [--out DIR] [--quiet]
 //!
 //! --k        children per parent (top-K heuristic moves; 0 = all legal moves)
 //! --rollout  rollout cap in moves (0 = play to the end)
@@ -13,11 +13,11 @@
 //! --rankpen  score penalty per heuristic rank below first (prefer the heuristic in ties)
 //! --tree     dump the beam genealogy (parent index and rollout length of every kept node)
 use splt::engine::parse_moves;
-use splt::rollout_beam::{arg, run, write_sequence, Config};
+use splt::rollout_beam::{arg, guide_of, run, write_sequence, Config};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let cfg = Config::from_args(&args);
+    let mut cfg = Config::from_args(&args);
     let out: String = arg(&args, "--out").unwrap_or_else(|| "runs".to_string());
     let quiet = args.iter().any(|a| a == "--quiet");
     let tree_path: Option<String> = arg(&args, "--tree");
@@ -27,6 +27,10 @@ fn main() {
     if let Some(path) = arg::<String>(&args, "--prefix") {
         let all = parse_moves(&std::fs::read_to_string(&path).expect("read prefix"));
         let keep: usize = arg(&args, "--keep").unwrap_or(all.len());
+        if cfg.guided {
+            // Guided search: rollouts follow the whole prefix game (see rollout_beam).
+            cfg.guide = Some(guide_of(&all.iter().map(|&m| m as u8).collect::<Vec<u8>>()));
+        }
         prefix = all[..keep.min(all.len())].iter().map(|&m| m as u8).collect();
     }
     if !quiet {

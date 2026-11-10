@@ -96,21 +96,55 @@ if os.path.exists('runs/queue/workers.log'):
         m = re.match(r'(\S+ \S+) \S+ begin \S+ .*--out runs/ratchet/(\S+)', line)
         if m:
             starts[m.group(2)] = datetime.datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S')
-t_first = min(starts.values()) if starts else None
-ratchets = []
+# Each run's iterations as [iteration, moves back, result, best before, seconds into the run].
+runs_raw = []
 rpat = re.compile(r'RATCHET iter (\d+) cut (\d+) back (\d+) seed \d+ -> (\d+) \(best (\d+)\) ([\d.]+)s total ([\d.]+)s')
-for logp in sorted(glob.glob('runs/ratchet/*/ratchet.log')):
+ipat = re.compile(r'ILS iter (\d+) \w+ parent \d+ back (\d+) kicked \d+ -> (\d+) \(best (\d+)\) [\d.]+s total ([\d.]+)s')
+spat = re.compile(r'STAT iter (\d+) .* total (\d+)s')
+for logp in sorted(glob.glob('runs/ratchet/*/ratchet.log') + glob.glob('runs/ratchet/*/ils.log')):
     name = os.path.basename(os.path.dirname(logp))
     head = open(logp).readline()
-    offset = (starts[name] - t_first).total_seconds() if name in starts else 0.0
-    its = []
+    its, attempts, dur = [], 0, 0.0
     for line in open(logp):
         m = rpat.match(line)
         if m:
             it, cut, back, res, best, secs, total = m.groups()
-            its.append([int(it), int(back), int(res), int(best), round((offset + float(total)) / 3600, 4)])
+            its.append([int(it), int(back), int(res), int(best), float(total)])
+            attempts, dur = int(it), float(total)
+            continue
+        m = ipat.match(line)
+        if m:
+            it, back, res, best, total = m.groups()
+            its.append([int(it), int(back), int(res), int(best), float(total)])
+            attempts, dur = max(attempts, int(it)), max(dur, float(total))
+            continue
+        m = spat.match(line)
+        if m:
+            attempts, dur = max(attempts, int(m.group(1))), max(dur, float(m.group(2)))
     if its:
-        ratchets.append({'name': name, 'start': head.strip(), 'iters': its})
+        runs_raw.append({'name': name, 'start': head.strip(), 'iters': its, 'attempts': attempts, 'dur': dur,
+                         'kind': 'ils' if logp.endswith('ils.log') else 'ratchet'})
+
+# Time axis: hours during which at least one run was going (idle gaps between sessions removed).
+ivs = sorted((starts[r['name']].timestamp(), starts[r['name']].timestamp() + r['dur']) for r in runs_raw if r['name'] in starts)
+merged = []
+for a0, a1 in ivs:
+    if merged and a0 <= merged[-1][1]:
+        merged[-1][1] = max(merged[-1][1], a1)
+    else:
+        merged.append([a0, a1])
+
+
+def active(t):
+    """Seconds of search before wall-clock time t."""
+    return sum(max(0.0, min(t, m1) - m0) for m0, m1 in merged)
+
+
+ratchets = []
+for r in runs_raw:
+    t0 = starts[r['name']].timestamp() if r['name'] in starts else (merged[0][0] if merged else 0.0)
+    its = [[i[0], i[1], i[2], i[3], round(active(t0 + i[4]) / 3600, 4)] for i in r['iters']]
+    ratchets.append({'name': r['name'], 'start': r['start'], 'iters': its, 'attempts': r['attempts'], 'kind': r['kind']})
 
 # ---------- beam genealogy ----------
 tree = []
