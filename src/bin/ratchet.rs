@@ -18,13 +18,21 @@
 //! Every new best is written to DIR/best_<splits>.txt and DIR/best.txt. Prints one RATCHET
 //! line per iteration (to DIR/ratchet.log) and a NEWBEST line per improvement.
 //!
+//! --guides 0,1 (v6): with 1, the attempt's rollouts include a guided rollout that follows
+//! the parent game wherever the same block still exists (`rollout_beam::play_out_guided`).
+//! The beam then searches deviations from the parent along the whole tail, each judged by
+//! what it does to the parent's own ending, and the result is never shorter than the parent.
+//! --ks, --wchains: per-attempt lists like --widths. --hjit S: multiply each heuristic
+//! factor by exp(S * gaussian) for the attempt.
+//!
 //! --diverse D (v5): a result whose moves agree with a pool member up to within D moves of
 //! the shorter game's end belongs to that member's family; it replaces the member only if
 //! longer and otherwise is dropped. Without it, the overnight pool of 8 filled with eight
 //! 2620-move games that differed only in their last few dozen moves, so every attempt
 //! started from the same prefix.
 use splt::engine::parse_moves;
-use splt::rollout_beam::{arg, run, verify, write_sequence, Config};
+use splt::heuristic::NP;
+use splt::rollout_beam::{arg, guide_of, run, verify, write_sequence, Config};
 use std::io::Write;
 use std::time::Instant;
 
@@ -64,6 +72,10 @@ fn main() {
     let widths: Vec<usize> = list(&args, "--widths").unwrap_or_else(|| vec![base.width]);
     let caps: Vec<usize> = list(&args, "--caps").unwrap_or_else(|| vec![base.cap]);
     let stochs: Vec<usize> = list(&args, "--stochs").unwrap_or_else(|| vec![base.stoch]);
+    let ks: Vec<usize> = list(&args, "--ks").unwrap_or_else(|| vec![base.k]);
+    let wchains: Vec<f32> = list(&args, "--wchains").unwrap_or_else(|| vec![base.wchain]);
+    let guides: Vec<usize> = list(&args, "--guides").unwrap_or_else(|| vec![base.guided as usize]);
+    let hjit: f64 = arg(&args, "--hjit").unwrap_or(0.0);
     std::fs::create_dir_all(&out).ok();
 
     // Pool of (length, moves), longest first.
@@ -84,7 +96,7 @@ fn main() {
     let mut log = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/ratchet.log")).unwrap();
     writeln!(
         log,
-        "# start {start_paths} ({best_len} splits) at {} pool={pool_n} slack={slack} diverse={diverse} pool_lens={:?} widths={widths:?} caps={caps:?} stochs={stochs:?} back={min_back}..{max_back} plateau={plateau}, {}",
+        "# start {start_paths} ({best_len} splits) at {} pool={pool_n} slack={slack} diverse={diverse} pool_lens={:?} widths={widths:?} caps={caps:?} stochs={stochs:?} ks={ks:?} wchains={wchains:?} guides={guides:?} hjit={hjit} back={min_back}..{max_back} plateau={plateau}, {}",
         now(),
         pool.iter().map(|p| p.0).collect::<Vec<_>>(),
         base.describe()
@@ -111,24 +123,42 @@ fn main() {
         let back = (min_back as f64 * (hi / min_back as f64).powf(next())).round() as usize;
         let cut = plen.saturating_sub(back);
         seed += 1;
-        let pick = |v: &Vec<usize>, u: f64| v[((u * v.len() as f64) as usize).min(v.len() - 1)];
+        fn pick<T: Copy>(v: &[T], u: f64) -> T {
+            v[((u * v.len() as f64) as usize).min(v.len() - 1)]
+        }
+        let mut hp = base.hp;
+        if hjit > 0.0 {
+            for i in 0..NP {
+                let (u1, u2) = (next().max(1e-12), next());
+                let g = (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos();
+                hp.s[i] *= (hjit * g).exp();
+            }
+        }
+        let guided = pick(&guides, next()) != 0;
         let cfg = Config {
             seed,
             noise: if base.noise > 0.0 { base.noise } else { 0.5 },
             width: pick(&widths, next()),
             cap: pick(&caps, next()),
             stoch: pick(&stochs, next()),
+            k: pick(&ks, next()),
+            wchain: pick(&wchains, next()),
+            guide: guided.then(|| guide_of(&parent)),
+            hp,
             ..base.clone()
         };
         let o = run(&parent[..cut], &cfg, None, false);
         let res = o.splits as usize;
         let line = format!(
-            "RATCHET iter {iter} cut {cut} back {back} seed {seed} -> {res} (best {best_len}) {:.1}s total {:.0}s parent {plen} w {} cap {} stoch {} at {}",
+            "RATCHET iter {iter} cut {cut} back {back} seed {seed} -> {res} (best {best_len}) {:.1}s total {:.0}s parent {plen} w {} cap {} stoch {} k {} wchain {} guide {} at {}",
             o.secs,
             t0.elapsed().as_secs_f64(),
             cfg.width,
             cfg.cap,
             cfg.stoch,
+            cfg.k,
+            cfg.wchain,
+            guided as u8,
             now()
         );
         writeln!(log, "{line}").unwrap();

@@ -185,6 +185,32 @@ pub fn alt_capacity(b: &Board, cap: u32) -> u32 {
     count
 }
 
+/// Capacity bound on the moves left, from the passive schedule: fast-forward with no splits
+/// and stop at the first explosion that the capacity in hand cannot reach. Capacity lost to
+/// clusters formed by falling blocks is not charged (a player may split those blocks first),
+/// so the only optimism missing is new clusters exploding inside the window, which late in a
+/// game takes many dozens of moves. Returns (bound, number of explosion steps simulated);
+/// the bound is capped at `horizon`.
+pub fn passive_bound(b: &Board, horizon: u16) -> (u16, u32) {
+    let mut cur = capacity(b).0;
+    let mut t = b.clone();
+    let mut elapsed: u16 = 0;
+    let mut steps = 0u32;
+    while let Some(dt) = t.next_explosion() {
+        if elapsed as u32 + dt as u32 > horizon as u32 {
+            return (cur.clamp(0, horizon as i32) as u16, steps);
+        }
+        if cur < (elapsed + dt) as i32 {
+            return (cur.max(0) as u16, steps);
+        }
+        let (_, info) = t.passive_step(elapsed).unwrap();
+        elapsed += dt;
+        steps += 1;
+        cur += info.refill_cap as i32;
+    }
+    (cur.clamp(0, horizon as i32) as u16, steps)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Features {
     pub k0: f32,

@@ -511,8 +511,13 @@ pub fn makes_big_cluster(b: &Board, i: usize, mask: u128) -> bool {
 }
 
 pub fn choose(b: &Board, pol: Policy) -> Option<usize> {
+    choose_hp(b, pol, &global())
+}
+
+/// `choose` with explicit heuristic factors.
+pub fn choose_hp(b: &Board, pol: Policy, hp: &HParams) -> Option<usize> {
     let a = analyse(b);
-    let ws = weights_from(b, &a);
+    let ws = weights_with(b, &a, hp);
     match pol {
         Policy::Greedy => best_move(&ws),
         Policy::AvoidBig => {
@@ -550,12 +555,17 @@ pub fn play_out_with(b: &mut Board, hp: &HParams, cap: usize) -> (usize, bool) {
 
 /// Play `pol` until the game ends or `cap` moves (0 = no cap). Returns (moves played, over).
 pub fn play_out(b: &mut Board, pol: Policy, cap: usize) -> (usize, bool) {
+    play_out_hp(b, pol, &global(), cap)
+}
+
+/// `play_out` with explicit heuristic factors.
+pub fn play_out_hp(b: &mut Board, pol: Policy, hp: &HParams, cap: usize) -> (usize, bool) {
     let mut n = 0usize;
     loop {
         if cap > 0 && n >= cap {
             return (n, false);
         }
-        let Some(m) = choose(b, pol) else { return (n, true) };
+        let Some(m) = choose_hp(b, pol, hp) else { return (n, true) };
         b.play(m).unwrap();
         n += 1;
     }
@@ -572,7 +582,13 @@ fn xorshift(s: &mut u64) -> u64 {
 /// Sample a move with probability proportional to exp(weight / temp) (temp <= 0: proportional
 /// to the weight itself, as in Josh Holder's weighted_random.py).
 pub fn choose_stochastic(b: &Board, temp: f64, rng: &mut u64) -> Option<usize> {
-    let ws = weights(b);
+    choose_stochastic_hp(b, temp, rng, &global())
+}
+
+/// `choose_stochastic` with explicit heuristic factors.
+pub fn choose_stochastic_hp(b: &Board, temp: f64, rng: &mut u64, hp: &HParams) -> Option<usize> {
+    let a = analyse(b);
+    let ws = weights_with(b, &a, hp);
     let mut probs = [0f64; MAXB];
     let mut total = 0f64;
     let wmax = ws.iter().copied().fold(0.0, f64::max);
@@ -602,13 +618,18 @@ pub fn choose_stochastic(b: &Board, temp: f64, rng: &mut u64) -> Option<usize> {
 
 /// Stochastic play-out seeded by `seed` (deterministic for a given seed).
 pub fn play_out_stochastic(b: &mut Board, temp: f64, seed: u64, cap: usize) -> (usize, bool) {
+    play_out_stochastic_hp(b, temp, seed, cap, &global())
+}
+
+/// `play_out_stochastic` with explicit heuristic factors.
+pub fn play_out_stochastic_hp(b: &mut Board, temp: f64, seed: u64, cap: usize, hp: &HParams) -> (usize, bool) {
     let mut rng = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
     let mut n = 0usize;
     loop {
         if cap > 0 && n >= cap {
             return (n, false);
         }
-        let Some(m) = choose_stochastic(b, temp, &mut rng) else { return (n, true) };
+        let Some(m) = choose_stochastic_hp(b, temp, &mut rng, hp) else { return (n, true) };
         b.play(m).unwrap();
         n += 1;
     }

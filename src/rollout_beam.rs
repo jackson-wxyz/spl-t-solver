@@ -9,8 +9,8 @@
 //! Used by `rbeam` (one search) and `ratchet` (repeated re-search of a best game's tail).
 
 use crate::engine::Board;
-use crate::heuristic::{choose, choose_stochastic, play_out, play_out_stochastic, weights, Policy};
-use crate::search::{features, Params};
+use crate::heuristic::{analyse, choose_hp, choose_stochastic_hp, play_out_hp, play_out_stochastic_hp, weights_with, HParams, Policy};
+use crate::search::{features, passive_bound, Params};
 use rayon::prelude::*;
 use std::time::Instant;
 
@@ -43,9 +43,94 @@ pub struct Config {
     pub max_kids: usize,
     /// Score penalty per heuristic rank below the top (rank 0 = heuristic's first choice).
     pub rank_pen: f32,
-    /// Label of the heuristic factors in use ("default" = Josh Holder's original). The
-    /// factors themselves are process-global (`heuristic::set_global`), set by `from_args`.
+    /// Label of the heuristic factors in use ("default" = Josh Holder's original).
     pub hparams: String,
+    /// The heuristic factors used for move ordering and rollouts.
+    pub hp: HParams,
+    /// Weight of the capacity chain left at the end of a rollout (`search::passive_bound`):
+    /// score = rollout length + wchain * bound(end state). A greedy rollout often dies with
+    /// capacity it could not use (wrong split direction), which makes its length a noisy
+    /// measure late in a game; the chain is what a careful finish could still play.
+    pub wchain: f32,
+    /// For the first `nocluster` moves of the game, only consider moves that do not create a
+    /// cluster, as long as one exists (an opening experiment: delay the first point blocks).
+    pub nocluster: usize,
+    /// Guided rollouts: when the guide's move for this turn is not available, look this many
+    /// moves back in the guide (same split direction) for a move that still is, before
+    /// falling back to the heuristic. That replays a guide move the path skipped earlier.
+    pub gscan: usize,
+    /// `--guide 1`: the caller should set `guide` to the game being re-searched.
+    pub guided: bool,
+    /// Guide game for guided rollouts (see `play_out_guided`), as the geometry of the block
+    /// split at each move number.
+    pub guide: Option<Guide>,
+}
+
+/// A game as the geometry [x, y, w, h] of the block split at each move (index = split count
+/// before the move). Unlike block indices, this still means something on a nearby board.
+pub type Guide = std::sync::Arc<Vec<[u8; 4]>>;
+
+pub fn guide_of(moves: &[u8]) -> Guide {
+    let mut b = Board::new();
+    let mut g = Vec::with_capacity(moves.len());
+    for &m in moves {
+        let bl = b.blocks[m as usize];
+        g.push([bl.x, bl.y, bl.w, bl.h]);
+        b.play(m as usize).expect("illegal move in guide");
+    }
+    std::sync::Arc::new(g)
+}
+
+/// The guide's move for this position, if a free block with exactly that geometry exists;
+/// failing that, the most recent of the guide's last `scan` same-direction moves that does.
+#[inline]
+fn guided_move(b: &Board, guide: &[[u8; 4]], scan: usize) -> Option<usize> {
+    let t = b.moves as usize;
+    if let Some(m) = guide_at(b, guide, t) {
+        return Some(m);
+    }
+    let mut back = 2;
+    while back <= scan && back <= t {
+        if let Some(m) = guide_at(b, guide, t - back) {
+            return Some(m);
+        }
+        back += 2;
+    }
+    None
+}
+
+#[inline]
+fn guide_at(b: &Board, guide: &[[u8; 4]], t: usize) -> Option<usize> {
+    let [x, y, w, h] = *guide.get(t)?;
+    let id = b.grid[y as usize * crate::engine::W + x as usize];
+    if id == crate::engine::EMPTY {
+        return None;
+    }
+    let bl = &b.blocks[id as usize];
+    (bl.x == x && bl.y == y && bl.w == w && bl.h == h && b.can_split(id as usize)).then_some(id as usize)
+}
+
+/// Guided rollout: play the guide game's move whenever the same block exists, the
+/// heuristic's choice otherwise, until the game ends. From a position on the guide game this
+/// replays the rest of it; from a position that deviated it tests whether the deviation can
+/// rejoin the guide's schedule and what that does to the ending. Returns moves played.
+fn play_out_guided(b: &mut Board, guide: &[[u8; 4]], scan: usize, hp: &HParams, record: Option<&mut Vec<u8>>) -> usize {
+    let mut n = 0usize;
+    let mut rec = record;
+    loop {
+        let m = match guided_move(b, guide, scan) {
+            Some(m) => m,
+            None => match choose_hp(b, Policy::Greedy, hp) {
+                Some(m) => m,
+                None => return n,
+            },
+        };
+        b.play(m).unwrap();
+        if let Some(r) = rec.as_mut() {
+            r.push(m as u8);
+        }
+        n += 1;
+    }
 }
 
 impl Default for Config {
@@ -68,6 +153,12 @@ impl Default for Config {
             max_kids: 0,
             rank_pen: 0.0,
             hparams: "default".to_string(),
+            hp: HParams::default(),
+            wchain: 0.0,
+            nocluster: 0,
+            gscan: 0,
+            guided: false,
+            guide: None,
         }
     }
 }
@@ -77,20 +168,19 @@ pub fn arg<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
 }
 
 impl Config {
-    /// Parse the search flags shared by `rbeam` and `ratchet`. `--hparams FILE|name=v,...`
-    /// sets the process-wide heuristic factors (call this once per process).
+    /// Parse the search flags shared by `rbeam`, `ratchet` and `abtest`.
+    /// `--hparams FILE|name=v,...` sets this configuration's heuristic factors.
     pub fn from_args(args: &[String]) -> Config {
         let d = Config::default();
-        let hparams = match arg::<String>(args, "--hparams") {
+        let (hparams, hp) = match arg::<String>(args, "--hparams") {
             Some(h) => {
                 let (text, label) = match std::fs::read_to_string(&h) {
                     Ok(t) => (t, std::path::Path::new(&h).file_stem().unwrap().to_string_lossy().to_string()),
                     Err(_) => (h.clone(), "inline".to_string()),
                 };
-                crate::heuristic::set_global(crate::heuristic::HParams::parse(&text));
-                label
+                (label, HParams::parse(&text))
             }
-            None => d.hparams.clone(),
+            None => (d.hparams.clone(), d.hp),
         };
         let seed: u64 = arg(args, "--seed").unwrap_or(0);
         let pol_name: String = arg(args, "--policy").unwrap_or_else(|| "greedy".to_string());
@@ -115,6 +205,12 @@ impl Config {
             max_kids: arg(args, "--maxkids").unwrap_or(d.max_kids),
             rank_pen: arg(args, "--rankpen").unwrap_or(d.rank_pen),
             hparams,
+            hp,
+            wchain: arg(args, "--wchain").unwrap_or(d.wchain),
+            nocluster: arg(args, "--nocluster").unwrap_or(d.nocluster),
+            gscan: arg(args, "--gscan").unwrap_or(d.gscan),
+            guided: arg::<u8>(args, "--guide").unwrap_or(0) != 0,
+            guide: None,
         }
     }
 
@@ -138,6 +234,15 @@ impl Config {
         if self.hparams != "default" {
             t.push_str(&format!("_h{}", self.hparams));
         }
+        if self.wchain != 0.0 {
+            t.push_str(&format!("_wc{}", self.wchain));
+        }
+        if self.guide.is_some() {
+            t.push_str(&format!("_g{}", self.gscan));
+        }
+        if self.nocluster > 0 {
+            t.push_str(&format!("_nc{}", self.nocluster));
+        }
         t.push_str(&format!("_s{}", self.seed));
         t
     }
@@ -145,7 +250,7 @@ impl Config {
     /// All settings, for RESULT lines.
     pub fn describe(&self) -> String {
         format!(
-            "width={} k={} rollout={} tie={} policy={} stoch={} temp={} wtwin={} wstuck={} stuckt={} wdebt={} maxkids={} rankpen={} hparams={} seed={} noise={}",
+            "width={} k={} rollout={} tie={} policy={} stoch={} temp={} wtwin={} wstuck={} stuckt={} wdebt={} maxkids={} rankpen={} hparams={} wchain={} guide={} nocluster={} seed={} noise={}",
             self.width,
             self.k,
             self.cap,
@@ -160,6 +265,9 @@ impl Config {
             self.max_kids,
             self.rank_pen,
             self.hparams,
+            self.wchain,
+            self.guide.is_some() as u8,
+            self.nocluster,
             self.seed,
             self.noise
         )
@@ -171,42 +279,60 @@ impl Config {
 enum Kind {
     Det(Policy),
     Stoch(u64),
+    Guided,
 }
 
 /// Rollout with each deterministic policy plus `stoch` seeded stochastic play-outs; the
-/// longest one counts. Returns (moves played, game over?, final board, kind).
-fn rollout(start: &Board, cfg: &Config, seed0: u64) -> (usize, bool, Board, Kind) {
+/// longest one counts. Returns (moves played, game over?, final board, kind, value), where
+/// value is the best over the rollouts of length + wchain * capacity chain at the end.
+fn rollout(start: &Board, cfg: &Config, seed0: u64) -> (usize, bool, Board, Kind, f32) {
     let mut best: Option<(usize, bool, Board, Kind)> = None;
+    let mut value = f32::NEG_INFINITY;
+    let mut consider = |n: usize, over: bool, b: Board, kind: Kind| {
+        let v = if cfg.wchain != 0.0 { n as f32 + cfg.wchain * passive_bound(&b, 400).0 as f32 } else { n as f32 };
+        if v > value {
+            value = v;
+        }
+        if best.as_ref().is_none_or(|x| n > x.0) {
+            best = Some((n, over, b, kind));
+        }
+    };
     for &pol in &cfg.pols {
         let mut b = start.clone();
-        let (n, over) = play_out(&mut b, pol, cfg.cap);
-        if best.as_ref().is_none_or(|x| n > x.0) {
-            best = Some((n, over, b, Kind::Det(pol)));
-        }
+        let (n, over) = play_out_hp(&mut b, pol, &cfg.hp, cfg.cap);
+        consider(n, over, b, Kind::Det(pol));
     }
     for j in 0..cfg.stoch {
         let s = seed0.wrapping_add(j as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0xD1B54A32D192ED03;
         let mut b = start.clone();
-        let (n, over) = play_out_stochastic(&mut b, cfg.temp, s, cfg.cap);
-        if best.as_ref().is_none_or(|x| n > x.0) {
-            best = Some((n, over, b, Kind::Stoch(s)));
-        }
+        let (n, over) = play_out_stochastic_hp(&mut b, cfg.temp, s, cfg.cap, &cfg.hp);
+        consider(n, over, b, Kind::Stoch(s));
     }
-    best.unwrap()
+    if let Some(g) = &cfg.guide {
+        let mut b = start.clone();
+        let n = play_out_guided(&mut b, g, cfg.gscan, &cfg.hp, None);
+        consider(n, true, b, Kind::Guided);
+    }
+    let (n, over, b, kind) = best.unwrap();
+    (n, over, b, kind, value)
 }
 
-fn replay_kind(b: &mut Board, kind: Kind, temp: f64) -> Vec<u8> {
+fn replay_kind(b: &mut Board, kind: Kind, cfg: &Config) -> Vec<u8> {
+    let (temp, hp) = (cfg.temp, &cfg.hp);
     let mut out = Vec::new();
     match kind {
+        Kind::Guided => {
+            play_out_guided(b, cfg.guide.as_ref().expect("guided rollout without a guide"), cfg.gscan, hp, Some(&mut out));
+        }
         Kind::Det(pol) => {
-            while let Some(m) = choose(b, pol) {
+            while let Some(m) = choose_hp(b, pol, hp) {
                 b.play(m).unwrap();
                 out.push(m as u8);
             }
         }
         Kind::Stoch(seed) => {
             let mut rng = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
-            while let Some(m) = choose_stochastic(b, temp, &mut rng) {
+            while let Some(m) = choose_stochastic_hp(b, temp, &mut rng, hp) {
                 b.play(m).unwrap();
                 out.push(m as u8);
             }
@@ -217,8 +343,22 @@ fn replay_kind(b: &mut Board, kind: Kind, temp: f64) -> Vec<u8> {
 
 /// The top-k heuristic moves, best first (k = 0: all legal moves).
 pub fn top_k_moves(b: &Board, k: usize) -> Vec<u8> {
-    let ws = weights(b);
+    top_k_moves_hp(b, k, &crate::heuristic::global())
+}
+
+/// `top_k_moves` with explicit heuristic factors.
+pub fn top_k_moves_hp(b: &Board, k: usize, hp: &HParams) -> Vec<u8> {
+    top_k_moves_opt(b, k, hp, false)
+}
+
+/// `avoid_clusters`: drop the moves that create a cluster, unless every move does.
+pub fn top_k_moves_opt(b: &Board, k: usize, hp: &HParams, avoid_clusters: bool) -> Vec<u8> {
+    let a = analyse(b);
+    let ws = weights_with(b, &a, hp);
     let mut idx: Vec<(usize, f64)> = ws.iter().copied().enumerate().filter(|&(_, w)| w > 0.0).collect();
+    if avoid_clusters && idx.iter().any(|&(i, _)| a.cluster[i] == 0) {
+        idx.retain(|&(i, _)| a.cluster[i] == 0);
+    }
     idx.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     if k > 0 {
         idx.truncate(k);
@@ -269,7 +409,7 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
             .par_iter()
             .enumerate()
             .flat_map_iter(|(pi, node)| {
-                let mv = top_k_moves(node, cfg.k);
+                let mv = top_k_moves_opt(node, cfg.k, &cfg.hp, (node.moves as usize) < cfg.nocluster);
                 mv.into_iter().enumerate().map(move |(r, m)| {
                     let mut c = node.clone();
                     c.play(m as usize);
@@ -290,9 +430,9 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
                     return (pi, m, f32::NEG_INFINITY, c.moves, true, c, Kind::Det(Policy::Greedy));
                 }
                 let seed0 = seed ^ (level as u64) << 40 ^ (pi as u64) << 8 ^ m as u64;
-                let (n, over, end, kind) = rollout(&c, cfg, seed0);
+                let (n, over, end, kind, value) = rollout(&c, cfg, seed0);
                 let reached = c.moves + n as u16;
-                let mut s = n as f32;
+                let mut s = value;
                 if !over {
                     s += cfg.tie * features(&end, &p).survive;
                 }
@@ -399,7 +539,7 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     for &m in &moves {
         b.play(m as usize).expect("illegal move in reconstructed path");
     }
-    moves.extend(replay_kind(&mut b, bkind, cfg.temp));
+    moves.extend(replay_kind(&mut b, bkind, cfg));
     assert!(b.is_over(), "reconstructed game not over");
     assert_eq!(b.moves, splits, "reconstructed game length mismatch");
     Outcome { moves, splits, rollouts, secs: t0.elapsed().as_secs_f64() }
