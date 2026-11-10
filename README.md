@@ -4,7 +4,7 @@ An attempt to find very long games of Simogo's *SPL-T* (2015). The score is the 
 splits made before no split is possible. Goal: understand what optimal play looks like and,
 ideally, beat the world record.
 
-## Status (2026-11-10, session 6)
+## Status (2026-11-10, session 7)
 
 | | splits |
 |---|---|
@@ -17,15 +17,23 @@ ideally, beat the world record.
 | Rollout beam, from scratch, two stochastic rollouts per child (width 100, k 4, cap 200, `--stoch 2`, seed 1, ~100 s) | 2064 (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`) |
 | Ratchet from the 2064 game (re-search the best games' tails with fresh seeds and varied settings; about a day of search) | 2670 (`runs/best/ratchet_2670.txt`) |
 | Iterated local search from the 2670 game (`ils`: kick the game, complete it by following its own schedule, polish with guided search; first hours) | 3012 (`runs/best/game_3012.txt`) |
-| **The same local search with the off-guide rule** (`--gres 12`: a rollout that has to leave the game's schedule keeps off the blocks the game is about to split; 11 minutes from the 3012 game) | **3103** (`runs/best/game_3103.txt`; hand-replay data `runs/best/game_3103.json`) |
+| The same local search with the off-guide rule (`--gres 12`: a rollout that has to leave the game's schedule keeps off the blocks the game is about to split; 11 minutes from the 3012 game, then five more hours) | 3103 (`runs/best/game_3103.txt`), then 3140 |
+| Pipe keeper from move 700 of that line (`keeper`: a beam with no rollouts that scores a position by how many levels the four pipes hold; 8 seconds) | 3588 (`runs/best/game_3588.txt`) |
+| **Pipe keeper again from move 2600 of the 3588 game, with a bonus for explosions two neighbouring pipes will share** (`--wsync 60`; 8 seconds) | **3898** (`runs/best/game_3898.txt`; hand-replay data `runs/best/game_3898.json`) |
 | Rollout beam resuming Josh Holder's 1208 game at move 700 | 1984 (`runs/best/from_josh1208_at700_1984_rbeam_w100_k4_r300.txt`) |
 
 The engine replays all four published record games move for move, and every sequence in
 `runs/best/` is re-verified by `replay`, which checks the engine's invariants after every
-move. The best game has also been replayed in Josh Holder's original Python emulator
-(`tools/analysis/pyreplay.py`), which accepts every move and ends on the last one. What has **not** been done is playing a solver sequence on the real game: a record
-claim needs that, and the sequences are block-index lists in engine order, so it needs the
-human replay tool listed under "Next steps".
+move. The best game has also been replayed in the engine's slow reference build and in
+Josh Holder's original Python emulator (`tools/analysis/pyreplay.py`), which accepts every
+move and ends on the last one. What has **not** been done is playing a solver sequence on
+the real game: a record claim needs that. `tools/replay.html` is the page for doing it by
+hand (see "Replaying a sequence by hand").
+
+The 3898 game keeps all four 2-column pipes working, eight clusters deep from move 2512,
+and ends with the pipes in two pairs that explode in unison. The earlier games ran three
+pipes and used the fourth as a store. How that works, and why about 3,900 is where this
+structure ends, is in [docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md), "Session 7".
 
 ## Prior art (the key find)
 
@@ -73,7 +81,15 @@ Of the approaches considered, existing open-source code turned out to be the rig
   positions. Also the rollout policies built on it (greedy, avoid-big, softmax-sampled).
 - `src/pipes.rs` - pipe-level structure (cluster values per 2-column pipe, "twins" count,
   whether a move plugs a pipe or buries free blocks, a health score for a pipe).
-- `src/bin/ils.rs` - **the current best solver**: iterated local search on finished games.
+- `src/keeper.rs`, `src/bin/keeper.rs` - **the current best solver**: the pipe keeper. A
+  beam search over all legal moves with no rollouts. It counts, per pipe, the separate
+  explosions the stack of clusters will produce (its levels), keeps the positions with
+  the most levels, refuses clusters that are not on top of a stack, and with `--wsync`
+  prefers positions in which neighbouring pipes will explode on the same move. Surplus
+  capacity is burnt in wide clusters; the beam finds those by itself. `--plan 1` is a
+  depth-first planner on the same model, for measurements on tidy positions.
+  `src/bin/dbg_keeper.rs` prints the keeper's view of every position of a game.
+- `src/bin/ils.rs` - the session 5-6 solver: iterated local search on finished games.
   Each step kicks a game (plays a different move somewhere in its last few hundred moves and
   completes it by following the original), then polishes the result with a guided beam
   (rollouts replay the game's own moves wherever the same block still exists), and keeps
@@ -135,8 +151,11 @@ Run these from the project folder. Requires Rust (`rustup`).
 ```
 cargo build --release
 cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 200 --seed 3
+cargo run --release --bin keeper -- runs/best/game_3103.txt --from 700 --width 300 --seed 2 --wcap 30 --out runs/try_3588.txt
+cargo run --release --bin keeper -- runs/best/game_3588.txt --from 2600 --width 1000 --seed 2 --wsync 60 --out runs/try_3898.txt
 cargo run --release --bin ils -- --start runs/best/game_3103.txt --hours 1 --beam 0.05 --gres 12 --out runs/ratchet/try
-cargo run --release --bin pipewatch -- runs/best/game_3103.txt --from 2300 --every 40
+cargo run --release --bin pipewatch -- runs/best/game_3898.txt --from 2300 --every 40
+cargo run --release --bin pipewatch -- runs/best/game_3898.txt --from 3640 --to 3700 --list 1
 cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 300 --prefix reference/josh-holder-SPLT/sequences/1208seq.txt --keep 700
 cargo run --release --bin replay -- runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt --final
 cargo run --release --bin paranoid -- --secs 60
@@ -144,6 +163,10 @@ cargo run --release --bin josh_play -- --agree reference/josh-holder-SPLT/sequen
 cargo run --release --bin solve -- --width 800
 cargo run --release --bin sweep -- sweeps/example.txt --width 200
 ```
+
+The two `keeper` lines reproduce the 3588 and 3898 games exactly. Most keeper runs from an
+early move fail within 150 moves (about one in ten gets through, see the research log), so
+try several `--seed` values and starting moves between 700 and 1200.
 
 `rbeam` is deterministic for a given set of flags; `--seed N` (N > 0) adds tiny score noise
 so the same setting gives a different game. Results vary a lot between seeds (1440 to 1885
@@ -211,7 +234,9 @@ to the record's.
 ## Next steps (ideas)
 
 The full story of what was tried, what failed, and why is in
-[docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md).
+[docs/RESEARCH_LOG.md](docs/RESEARCH_LOG.md). Its "Resume here" section has the current
+targets (session 7: making keeper runs survive their first 150 moves, other openings, and
+the last 190 moves). The list below is from sessions 1 and 2 and is kept for the record.
 
 - **Human-friendly replay tool**: an HTML page that shows the board and highlights the next
   block to tap, so a sequence can be followed on the phone or the Steam version. This is

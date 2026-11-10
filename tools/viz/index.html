@@ -99,9 +99,9 @@ td:first-child, th:first-child { text-align: left; }
 <header>
   <div class="eyebrow" id="eyebrow">Simogo's SPL-T · a solver's game</div>
   <h1>SPL-T Clockwork</h1>
-  <p class="lede">How a computer-found game of SPL-T outlasts every score on record: four columns of point blocks kept in a halving chain, a beam search that steers by how long a simple policy would survive, and a local search that reworks the best game's ending by following its own schedule.</p>
+  <p class="lede">How a computer-found game of SPL-T outlasts every score on record: four columns of point blocks kept in a halving chain, a beam search that steers the opening by how long a simple policy would survive, and from move 700 a second search that asks only one thing of a position: how many levels deep its four columns are.</p>
   <div class="kpis">
-    <div class="kpi hero"><div class="v" id="kpi-best">–</div><div class="l">splits, the solver's best game: a rollout beam from an empty board, a ratchet re-searching its tail, then a local search around the game itself</div></div>
+    <div class="kpi hero"><div class="v" id="kpi-best">–</div><div class="l">splits, the solver's best game: a rollout beam from an empty board for 700 moves, then a search that keeps all four pipes full to the end</div></div>
     <div class="kpi"><div class="v">1,910</div><div class="l">best score posted publicly (ryederek, March 2026, on the Legacy Collection)</div></div>
     <div class="kpi"><div class="v">1,277</div><div class="l">the 2022 record, Jonathon Becker, by hand</div></div>
     <div class="kpi"><div class="v" id="kpi-runs">50</div><div class="l">solver runs in the distribution below</div></div>
@@ -126,21 +126,21 @@ td:first-child, th:first-child { text-align: left; }
 <section id="s-margin">
   <div class="sec-head">
     <h2>The search's safety margin</h2>
-    <p>The evaluation that made this possible is blunt: from every candidate position, play the hand-tuned heuristic greedily and count how many moves it survives. The chart shows that count along the final game. Greedy play alone would have died within a few hundred moves from almost any position; the search kept picking positions where that margin stayed above 200 until the board finally filled.</p>
+    <p>The evaluation that made the opening possible is blunt: from every candidate position, play the hand-tuned heuristic greedily and count how many moves it survives. The chart shows that count along the final game. For the first 700 moves the search kept picking positions where that margin stayed above 200. At move 700 a different search takes over (see "The pipe keeper" below) and the margin drops to between 20 and 120 for the rest of the game. Those are positions the greedy heuristic cannot play: every pipe is full, and there is no slack for a policy that does not know the schedule.</p>
   </div>
   <figure>
     <div class="row"><span class="key"><i style="background:var(--accent)"></i>greedy rollout survives (moves)</span><span class="key"><i style="background:var(--gray)"></i>moves actually remaining in this game</span></div>
     <div class="wrap"><svg id="margin" viewBox="0 0 1000 300" aria-label="Greedy rollout length and remaining moves along the game"></svg><div class="tip" id="margin-tip"></div></div>
     <div class="row"><button type="button" data-table="margin">Show as table</button></div>
     <div class="tbl" id="margin-table" hidden></div>
-    <figcaption>Hover for values. The vertical hairlines mark the moves by which every pipe first held three, then seven clusters, and the point where the margin starts to collapse.</figcaption>
+    <figcaption>Hover for values. The vertical hairlines mark the moves by which every pipe first held three, then seven clusters, and move 700, where the second search takes over.</figcaption>
   </figure>
 </section>
 
 <section id="s-board">
   <div class="sec-head">
     <h2>A full board is a healthy board</h2>
-    <p>The first intuition, rewarding free space, was backwards. From move 700 on, 100 to 112 of the 128 cells are point blocks and only three to five blocks can legally be split, yet the game has over a thousand moves left. Free cells are the raw material being turned into the next cluster; everything else is the clockwork running.</p>
+    <p>The first intuition, rewarding free space, was backwards. From move 700 on, 108 to 120 of the 128 cells are point blocks and only three or four blocks can legally be split, yet the game has over three thousand moves left. Free cells are the raw material being turned into the next cluster; everything else is the clockwork running.</p>
   </div>
   <div class="two">
     <figure>
@@ -157,7 +157,7 @@ td:first-child, th:first-child { text-align: left; }
 <section id="s-rank">
   <div class="sec-head">
     <h2>How often the search overruled the heuristic</h2>
-    <p>Each child of a beam node is one of the heuristic's four best-rated moves. In Josh Holder's computed games of 2022 the heuristic's first choice was played 98% of the time; here it was played 61% of the time, and in the opening less than half. The search is doing real work, not ratifying the heuristic.</p>
+    <p>Each child of a beam node is one of the heuristic's four best-rated moves. In Josh Holder's computed games of 2022 the heuristic's first choice was played 98% of the time; in the first 700 moves of this game it was played 57% of the time, and in the opening less than half. From move 700 the search does not consult the heuristic at all. Its move is still the heuristic's first choice 57% of the time and one of its top four 97% of the time: with three legal moves on average there is not much room to disagree, and the disagreements are where the game is decided.</p>
   </div>
   <figure>
     <div class="row" id="rank-legend"></div>
@@ -184,9 +184,9 @@ td:first-child, th:first-child { text-align: left; }
 
 <section id="s-ratchet">
   <div class="sec-head">
-    <h2>The ratchet and the local search: reworking the tail of the best game</h2>
-    <p>Because single runs vary so much, the long games come from a second search layered on top. The ratchet takes the best game so far, cuts it some number of moves before the end, runs a fresh beam from there with a new seed, and keeps the result only if it is at least as long. Cuts less than about 100 moves from the end never change the length (the last 70 moves of a game are already fixed by how much splitting capacity is on the board); cuts 120 to 400 back produce the gains. Keeping a pool of the eight longest games and varying each attempt's settings took a 2,064 game to 2,670, and then stalled.</p>
-    <p>The local search got past that. Its rollouts do not ask the heuristic what to do: they replay the move the best game itself made at the same point, whenever the same block is still there. A position on the game is then worth exactly what the game went on to score, and a position that deviates is judged by whether it can get back onto the game's schedule and what that does to the ending. Each step kicks the game (plays a different move somewhere in its last 450 moves, which usually costs dozens of moves), then searches for a repair. A step takes about a second, and now and then the repaired game is longer. It passed 3,000 within an hour, partly by discovering that two neighbouring pipes can be made to explode on the same move, which refills them with one wide block worth seven splits instead of six. It stalled at 3,012 until one detail changed: when a rollout has to leave the game's schedule it now picks a block the game is not about to split, in practice one in the fourth pipe, so the three working pipes keep their rhythm. That added 91 moves in eleven minutes.</p>
+    <h2>The ratchet and the local search: three pipes and a store</h2>
+    <p>Before the keeper, the long games came from a second search layered on top of the rollout beam. None of its moves are in the best game any more, but it is how the structure of a long game was found. The ratchet takes the best game so far, cuts it some number of moves before the end, runs a fresh beam from there with a new seed, and keeps the result only if it is at least as long. Cuts less than about 100 moves from the end never change the length (the last 70 moves of a game are already fixed by how much splitting capacity is on the board); cuts 120 to 400 back produce the gains. Keeping a pool of the eight longest games and varying each attempt's settings took a 2,064 game to 2,670, and then stalled.</p>
+    <p>The local search got past that. Its rollouts do not ask the heuristic what to do: they replay the move the best game itself made at the same point, whenever the same block is still there. A position on the game is then worth exactly what the game went on to score, and a position that deviates is judged by whether it can get back onto the game's schedule and what that does to the ending. Each step kicks the game (plays a different move somewhere in its last 450 moves, which usually costs dozens of moves), then searches for a repair. A step takes about a second, and now and then the repaired game is longer. It passed 3,000 within an hour, partly by discovering that two neighbouring pipes can be made to explode on the same move, which refills them with one wide block worth seven splits instead of six. It stalled at 3,012 until one detail changed: when a rollout has to leave the game's schedule it now picks a block the game is not about to split, in practice one in the fourth pipe, so the three working pipes keep their rhythm. That added 91 moves in eleven minutes, and five more hours added 37. These games run three pipes at full depth and use the fourth as a store: spare splits go into clusters in the wrong place there, which come back hundreds of moves later. The store is what carries them past the point where three pipes stop keeping up, and it is why they end near 3,100.</p>
   </div>
   <figure>
     <h3>Best game so far, and every attempt, by hours of search</h3>
@@ -201,6 +201,28 @@ td:first-child, th:first-child { text-align: left; }
     <div class="wrap"><svg id="backs" viewBox="0 0 1000 240" aria-label="Ratchet attempts: gain over the best game against cut depth"></svg><div class="tip" id="backs-tip"></div></div>
     <figcaption>Above the line: the attempt beat the best game and replaced it. On the line: a different game of the same length. For the local search the depth is where the kick was made. Depth is on a log scale.</figcaption>
   </figure>
+</section>
+
+<section id="s-keeper">
+  <div class="sec-head">
+    <h2>The pipe keeper: all four pipes, and no rollouts</h2>
+    <p>The best game comes from a much simpler search. It is a beam over every legal move that never plays a game out. It scores a position by counting, for each pipe, how many separate explosions its stack of clusters will produce: two clusters that will reach the bottom together count once, and a pipe that is waiting for its next cluster gets one for it in advance. That count is the pipe's depth, eight at most. The beam keeps the positions with the greatest total depth, refuses clusters that are not on top of a stack, and among positions of equal depth prefers those in which two neighbouring pipes will explode on the same move.</p>
+    <p>A board with more depth than the move number needs gets more splits back than it can spend, and a full board has nowhere to keep them. The rollout searches let one pipe absorb the surplus and lost that pipe. The keeper burns the surplus instead: it turns a refill block into a cluster of four 2×1 blocks, which takes three splits where the ordinary route takes seven and throws the other four away. The best game does that about 150 times after move 700 and loses 632 splits to it. In exchange, every pipe is eight clusters deep from about move 2,510 to the end, and the depth is there when the move number catches up with it.</p>
+    <p>Two runs of eight seconds each produced the game: one from move 700 of the earlier best game (3,588 splits), and one from move 2,600 of that result with the bonus for shared explosions switched on. Where a keeper game ends follows from what it has built. An eight-deep pipe explodes about every n/265 moves at move n and each explosion returns three splits, or seven for two pipes that explode together, so a structure keeps up until n/265 equals what it returns per period. The games last up to about 200 moves beyond that point on the few spare splits a full board holds.</p>
+  </div>
+  <figure>
+    <div class="tbl"><table>
+      <thead><tr><th>Structure at the end</th><th>Splits back per period</th><th>Keeps up until move</th><th>Games that end past it</th></tr></thead>
+      <tbody>
+        <tr><td>Three pipes and a store (the earlier games)</td><td>10</td><td>2,650</td><td>3,012 to 3,140</td></tr>
+        <tr><td>Four single pipes</td><td>12</td><td>3,180</td><td>33 keeper runs: 3,306 to 3,443</td></tr>
+        <tr><td>One pair and two singles</td><td>13</td><td>3,445</td><td>301 keeper runs: 3,468 to 3,652</td></tr>
+        <tr><td>Two pairs</td><td>14</td><td>3,710</td><td>34 keeper runs: 3,712 to 3,898</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>432 keeper runs from moves 2,300 to 3,100 of the 3,588 game, with the bonus for shared explosions; the other 64 failed before move 3,300. A run is put in a row by where it ended, and the structure was checked directly only for the best game (two pairs). The first row is the rollout searches' structure, for comparison; its store is why it lasts so long past its balance point.</figcaption>
+  </figure>
+  <p>Two things it does not do. Nine runs in ten from an early move die within 150 moves, because the position they take over still holds the old game's store and the keeper will not touch it. And nothing tried so far improves a finished keeper game: from move 3,300 on, every setting ends on exactly 3,898, and the local search of the previous section finds no repair for a game whose cycle has no slack.</p>
 </section>
 
 <section id="s-tree">
@@ -224,7 +246,7 @@ td:first-child, th:first-child { text-align: left; }
 <section id="s-phases">
   <div class="sec-head">
     <h2>How the game is played, phase by phase</h2>
-    <p id="phases-intro">Numbers are computed from the featured game; the other long games look the same.</p>
+    <p id="phases-intro">Numbers are computed from the featured game.</p>
   </div>
   <div class="phases" id="phases"></div>
 </section>
@@ -239,8 +261,8 @@ td:first-child, th:first-child { text-align: left; }
     <div class="wrap"><svg id="bounds" viewBox="0 0 1000 280" aria-label="Moves between explosions in one pipe, against the move number"></svg><div class="tip" id="bounds-tip"></div></div>
     <figcaption>Simulated pipe: a new cluster worth the move number arrives three moves after each explosion, and every explosion halves the clusters above it (rounding down). Horizontal lines: twelve moves (four pipes refilled with 2×2 blocks) and sixteen (the most any mix of refills could fund). The solver's games achieve about thirteen.</figcaption>
   </figure>
-  <p>An eight-deep pipe falls behind around move 3,200 with plain refills and around 4,000 with perfect ones, and the slack left on the board stretches that by roughly ten percent. So no game can pass about 4,700 splits, and a perfect four-pipe clockwork tops out near 3,800. Josh Holder's own estimates were 3,700 in theory and about 1,800 in practice. My guess for the real maximum used to be around 3,000, because an eight-deep pipe leaves no room for timing errors, every halving rounds down, and the forced alternation of split directions keeps fighting the staggering of the four pipes. The solver has now passed that by the route the upper line in the chart stands for: two neighbouring pipes that explode on the same move refill as one 4×2 block worth seven splits, not two blocks worth six. With both pairs of pipes doing that, each pipe could afford fourteen moves between explosions, which holds until about move 3,700.</p>
-  <p class="note">Game generated by the rollout beam, the ratchet and the local search (heuristic ported from Josh Holder's SPLT emulator); per-move statistics exported from the Rust engine, which replays all four published record games move for move. Nothing here has been replayed on the real game yet.</p>
+  <p>An eight-deep pipe falls behind around move 3,200 with plain refills and around 4,000 with perfect ones, and the slack left on the board stretches that by roughly ten percent. So no game can pass about 4,700 splits, and a perfect four-pipe clockwork tops out near 3,800. Josh Holder's own estimates were 3,700 in theory and about 1,800 in practice. My guess for the real maximum used to be around 3,000, because an eight-deep pipe leaves no room for timing errors, every halving rounds down, and the forced alternation of split directions keeps fighting the staggering of the four pipes. That guess described the rollout searches, not the game. Two neighbouring pipes that explode on the same move refill as one 4×2 block worth seven splits, not two blocks worth six, so with both pairs of pipes doing that each pipe can afford fourteen moves between explosions, which holds until about move 3,700. The best game is that clockwork: two pairs, half a period apart, ending 188 moves past that point. All four pipes in unison would return fifteen, but their one 8×2 block can only be turned into clusters with 3, 7, 11 or 15 splits, and the interval is whatever the cluster values make it, so that structure cannot run by itself.</p>
+  <p class="note">Game generated by the rollout beam (first 700 moves; heuristic ported from Josh Holder's SPLT emulator) and the pipe keeper; per-move statistics exported from the Rust engine, which replays all four published record games move for move. Nothing here has been replayed on the real game yet.</p>
 </section>
 </main>
 <script src="data.js"></script>
@@ -370,8 +392,17 @@ td:first-child, th:first-child { text-align: left; }
       maxv: Math.max(0, ...ms.map(m => Math.max(0, ...G.pipes[m].flat()))),
     };
   }
-  let E = 0; for (let m = 0; m < N; m++) if (G.roll[m] >= 150) E = m;
-  E = Math.max(1000, Math.min(N - 50, Math.floor(E / 50) * 50));
+  // The featured game (3,898 splits) is a rollout-beam opening up to move KEEP and a pipe-keeper
+  // game from there. FULL: from this move on no pipe ever holds fewer than seven clusters (with
+  // the one being built, eight). LASTBURN: the last cluster made of blocks larger than 1x1.
+  // The phase texts below describe this game and must be revisited if the featured game changes.
+  const KEEP = 700;
+  let FULL = 0; for (let m = 0; m <= N; m++) if (G.pipes[m].some(c => c.length < 7)) FULL = m + 1;
+  FULL = Math.round(FULL / 10) * 10;
+  let LASTBURN = 0; for (let m = 0; m <= N; m++) { const c = G.cluster[m]; if (c !== '-' && c !== 'end' && c !== '4x1x1') LASTBURN = m; }
+  LASTBURN = Math.round(LASTBURN / 10) * 10;
+  const burns = (a, b) => { let k = 0; for (let m = a; m < Math.min(b, N + 1); m++) { const c = G.cluster[m]; if (c !== '-' && c !== 'end' && c !== '4x1x1') k++; } return k; };
+  const E = LASTBURN;
   const clusterMoves = G.cluster.filter(c => c !== '-' && c !== 'end');
   const ST = { f2: firstAll(2), f3: firstAll(3), f5: firstAll(5), f7: firstAll(7), E,
     ncl: clusterMoves.length, n11: clusterMoves.filter(c => c === '4x1x1').length, mpc: N / Math.max(1, clusterMoves.length) };
@@ -379,7 +410,7 @@ td:first-child, th:first-child { text-align: left; }
     lineChart('margin', [
       { xs, ys: remaining, color: css('--gray'), name: 'moves remaining' },
       { xs, ys: G.roll.slice(0, N).map(v => Math.max(0, v)), color: css('--accent'), name: 'greedy rollout', label: 'greedy rollout' },
-    ], { w: 1000, h: 300, xmax: N, ymax: Math.ceil((N + 50) / 500) * 500, marks: [{ x: ST.f3, label: 'every pipe ≥3 clusters' }, { x: ST.f7, label: 'every pipe ≥7' }, { x: ST.E, label: 'margin collapses' }] });
+    ], { w: 1000, h: 300, xmax: N, ymax: Math.ceil((N + 50) / 500) * 500, marks: [{ x: ST.f3, label: 'every pipe ≥3 clusters' }, { x: ST.f7, label: 'every pipe ≥7' }, { x: KEEP, label: 'the keeper takes over' }] });
   }
   function drawBoard() {
     lineChart('free', [{ xs, ys: G.free.slice(0, N), color: css('--accent'), name: 'free cells', area: true }], { w: 500, h: 200, xmax: N, ymax: 128, xticks: 4 });
@@ -476,14 +507,15 @@ td:first-child, th:first-child { text-align: left; }
   slider.addEventListener('input', drawTree);
 
   // ---------- phases ----------
-  const W0 = win(0, 100), W1a = win(100, 200), W1b = win(300, 400), W12 = win(100, 350), W2 = win(350, 900), W3 = win(900, E), W4 = win(E, N);
+  const W0 = win(0, 100), W1a = win(100, 200), W1b = win(300, 400), W12 = win(100, 350), W2 = win(350, KEEP), W3 = win(KEEP, FULL), W4 = win(FULL, LASTBURN), W5 = win(LASTBURN, N);
   const pc = (x) => Math.round(100 * x) + '%', f1 = (x) => x.toFixed(1), r0 = (x) => fmt(Math.round(x));
   const phases = [
     { n: 'Moves 0–100', t: 'Opening: cut the slab', d: `The board starts as one 8×16 block and the first hundred moves carve it into 2×2 and 2×4 pieces. ${r0(W0.free)} free cells on average, ${r0(W0.legal)} legal moves, and the first clusters are worth at most ${fmt(W0.maxv)}. The search departs from the heuristic most here (its first choice is played only ${pc(W0.r1)} of the time): the opening decides which columns become pipes and how their timing is staggered, and it is where the seed-to-seed variance of the whole run is born.` },
     { n: 'Moves 100–350', t: 'Build-up: raise the pipes', d: `By move ${ST.f2} every column pair holds two clusters, by ${ST.f3} three, by ${ST.f5} five. Free cells fall from ${r0(W1a.free)} to ${r0(W1b.free)} per board. The chains are not yet geometric: adjacent clusters have a median ratio of ${f1(W12.ratio)}, because they were made within a few dozen moves of each other, so the first explosions free only small values.` },
-    { n: 'Moves 350–900', t: 'Settling: the chains turn geometric', d: `Every pipe holds seven clusters from move ${ST.f7}. Each explosion at the bottom of a pipe drops the whole stack a slot and halves it, and because new clusters keep arriving worth the move number, the stack sorts itself into a staircase. Twin clusters (adjacent values within 1.5×) are still common, around ${r0(W2.twins)} per board, and this is where weak runs go wrong: a big cluster landing at the bottom of a pipe with nothing beneath it can only count down, and it drags that pipe for hundreds of moves.` },
-    { n: 'Moves 900–' + fmt(E), t: 'Steady state: the clockwork', d: `The median ratio between adjacent clusters locks at ${f1(W3.ratio)} and twins fall to about ${r0(W3.twins)} per board. One cluster is created every ${ST.mpc.toFixed(2)} moves, close to the throughput the arithmetic demands: an explosion frees a 2×2 block, three splits turn it into the next cluster, so four pipes must each fire about once every twelve moves. Nearly all clusters (${fmt(ST.n11)} of ${fmt(ST.ncl)}) are 2×2 groups of 1×1 blocks. The board carries ${pct(W3.pts, 0.1)}–${pct(W3.pts, 0.9)} point cells, only ${f1(W3.legal)} legal moves on average, and a greedy rollout margin of ${pct(W3.roll, 0.1)}–${pct(W3.roll, 0.9)} moves.` },
-    { n: 'Moves ' + fmt(E) + '–' + fmt(N), t: 'Endgame: the ceiling', d: `Top clusters are now worth ${fmt(Math.floor(W4.maxv / 100) * 100)}+. To arrive at the bottom small enough to explode on time they need seven halvings, which means nearly every slot of every pipe is occupied and there is no slack left to stagger. The greedy margin falls from ${fmt(G.roll[E])} to ${fmt(Math.max(0, G.roll[N - 20]))} moves, the heuristic's first choice is played ${pc(W4.r1)} of the time, and the game ends with ${G.pts[N]} of 128 cells held by point blocks and the last free blocks the wrong shape for the required direction.` },
+    { n: 'Moves 350–' + fmt(KEEP), t: 'Settling: the chains turn geometric', d: `Every pipe holds seven clusters for the first time at move ${ST.f7}. Each explosion at the bottom of a pipe drops the whole stack a slot and halves it, and because new clusters keep arriving worth the move number, the stack sorts itself into a staircase. Twin clusters (adjacent values within 1.5×) are still common, around ${r0(W2.twins)} per board. This is the last stretch played by the rollout beam, and a greedy rollout still survives ${pct(W2.roll, 0.1)}–${pct(W2.roll, 0.9)} moves from its positions.` },
+    { n: 'Moves ' + fmt(KEEP) + '–' + fmt(FULL), t: 'The keeper takes over: depth first, surplus burnt', d: `From move ${fmt(KEEP)} the game is played by the pipe keeper, which looks only at how deep each pipe is. The four pipes hold 27 to 31 of the 32 possible levels between them here, and the missing ones are added one at a time. A pipe gains a level by making two clusters in one interval that reach the bottom one move apart, and a third on exactly the second of those two moves. ${burns(KEEP, FULL)} clusters in this stretch are made of 2×1 or 1×2 blocks: surplus capacity being burnt, four splits at a time. The board carries ${pct(W3.pts, 0.1)}–${pct(W3.pts, 0.9)} point cells and ${f1(W3.legal)} legal moves on average, and twins fall to about ${r0(W3.twins)} per board.` },
+    { n: 'Moves ' + fmt(FULL) + '–' + fmt(LASTBURN), t: 'Four full pipes, then two pairs', d: `From about move ${fmt(FULL)} every pipe is eight clusters deep and stays that way. Pipes A and B explode on the same move from about move 2,850, pipes C and D from about move 3,300; a pair's two holes refill as one 4×2 block worth seven splits instead of six. The median ratio between adjacent clusters is ${f1(W4.ratio)}, there are ${f1(W4.legal)} legal moves on average, and ${pct(W4.pts, 0.1)}–${pct(W4.pts, 0.9)} of the 128 cells are point blocks. The burning thins out as the move number catches up with what the pipes return: ${burns(FULL, LASTBURN + 10)} clusters of larger blocks here, the last at about move ${fmt(LASTBURN)}.` },
+    { n: 'Moves ' + fmt(LASTBURN) + '–' + fmt(N), t: 'The fourteen-move cycle, and the end', d: `Nothing is burnt any more. From about move 3,640 each pair explodes every fourteen moves, seven moves after the other, and its 4×2 block takes exactly seven splits to become the next two clusters: fourteen splits back per fourteen moves. Top clusters are worth ${fmt(Math.floor(W5.maxv / 100) * 100)}+. The interval is the move number divided by about 265, so it keeps stretching, the pipes fall behind by a split or two per cycle, and the few spare splits on the board run out. The game ends with ${G.pts[N]} of 128 cells held by point blocks, five splits of capacity left in blocks of the wrong shape for the direction due, and the next explosion ${G.next[N]} moves away.` },
   ];
   const ph = document.getElementById('phases');
   for (const p of phases) { const d = document.createElement('div'); d.className = 'phase'; const n = document.createElement('div'); n.className = 'n'; n.textContent = p.n; const b = document.createElement('div'); const h = document.createElement('h3'); h.textContent = p.t; const t = document.createElement('p'); t.textContent = p.d; b.append(h, t); d.append(n, b); ph.appendChild(d); }

@@ -1,6 +1,6 @@
 //! How each of the four pipes is doing along a game.
 //!
-//! usage: pipewatch <seq-file> [--from A] [--to B] [--every N] [--window W] [--render M]
+//! usage: pipewatch <seq-file> [--from A] [--to B] [--every N] [--window W] [--render M] [--list 1]
 //!                  [--startboard FILE]   (a game from a `whatif` position; the window table
 //!                                         then counts moves from that position)
 //!
@@ -42,6 +42,8 @@ fn main() {
     let every: usize = arg(&args, "--every").unwrap_or(50);
     let window: usize = arg(&args, "--window").unwrap_or(100);
     let render: Option<usize> = arg(&args, "--render");
+    // --list 1: one line per move between A and B (direction, block, what it caused).
+    let list = arg::<u8>(&args, "--list").unwrap_or(0) != 0;
     splt::rollout_beam::load_start(&args);
     let mut b = Board::start();
     let base = b.moves as usize;
@@ -61,7 +63,24 @@ fn main() {
         if br & 2 != 0 {
             buries[wi][(bl.x / 2) as usize] += 1;
         }
+        let horiz = b.horizontal_next();
         let info = b.play(m).expect("illegal move");
+        if list && base + k + 1 >= from && base + k + 1 <= to {
+            println!(
+                "{:>5} {} pipe {}{} {}x{} at ({},{}){}{}{}",
+                base + k + 1,
+                if horiz { "H" } else { "V" },
+                bl.x / 2,
+                if bl.w > 2 { "+" } else { " " },
+                bl.w,
+                bl.h,
+                bl.x,
+                bl.y,
+                if info.new_point_blocks > 0 { format!("  cluster({} blocks, lost {})", info.new_point_blocks, info.new_point_cap) } else { String::new() },
+                if info.exploded > 0 { format!("  EXPLODE cols {:08b}", info.exploded_cols.reverse_bits()) } else { String::new() },
+                if info.refill_cap > 0 { format!(" refill +{}", info.refill_cap) } else { String::new() },
+            );
+        }
         for p in 0..4 {
             if info.exploded_cols >> (2 * p) & 3 != 0 {
                 expl[wi][p] += 1;
@@ -70,7 +89,7 @@ fn main() {
         made[wi][(bl.x / 2) as usize] += 1;
         refill[wi] += info.refill_cap;
         let n = base + k + 1;
-        if n >= from && n <= to && (n % every == 0 || k + 1 == moves.len()) {
+        if !list && n >= from && n <= to && (n % every == 0 || k + 1 == moves.len()) {
             print!("{n:>5} |");
             for p in 0..4 {
                 let c: Vec<String> = clusters(&b, p).iter().map(|v| v.to_string()).collect();

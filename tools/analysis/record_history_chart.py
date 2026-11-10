@@ -24,17 +24,19 @@ recs = [
     (2026.19, 1396, 'ryederek', UNK),
     (2026.22, 1910, 'ryederek', UNK),
 ]
-SOLVER = (2026.86, 3103)
+SOLVER = (2026.86, 3898)
 
 plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 11})
-fig, ax = plt.subplots(figsize=(9, 5.4), dpi=220)
+# The height keeps about 2,500 splits per 5.4 inches, so the label offsets below (in splits)
+# hold whatever the top of the axis is.
+fig, ax = plt.subplots(figsize=(9, 7.2), dpi=220)
 fig.patch.set_facecolor(SURF)
 ax.set_facecolor(SURF)
 
 # Context lines: original release and the Legacy Collection re-release.
-for x, y, ha, txt in [(2015.80, 3270, 'left', 'SPL-T released (iOS)'),
+for x, y, ha, txt in [(2015.80, 4110, 'left', 'SPL-T released (iOS)'),
                       (2025.93, 1200, 'right', 'Legacy Collection\nreleased (Steam, Switch)')]:
-    ax.axvline(x, ymax=1 if ha == 'left' else 0.8, color=MUTED, lw=1, ls=(0, (3, 3)), zorder=1)
+    ax.axvline(x, ymax=1 if ha == 'left' else 0.6, color=MUTED, lw=1, ls=(0, (3, 3)), zorder=1)
     ax.text(x + (0.1 if ha == 'left' else -0.1), y, txt, ha=ha, va='top', color=INK2, fontsize=9.5)
 
 # The record as a step function: each record stands until it is beaten.
@@ -72,10 +74,10 @@ lab(2026.22, 1910, '1,910  ryederek (Mar 2026)', ha='right', dx=0.2)
 lab(SOLVER[0], SOLVER[1], f'{SOLVER[1]:,}  this solver (Nov 2026)\ncomputed; not yet played', ha='right', dx=0.22)
 
 ax.set_xlim(2015.2, 2027.3)
-ax.set_ylim(800, 3300)
+ax.set_ylim(800, 4150)
 ax.set_xticks(range(2016, 2028, 2))
-ax.set_yticks([1000, 1500, 2000, 2500, 3000])
-ax.set_yticklabels(['1,000', '1,500', '2,000', '2,500', '3,000'])
+ax.set_yticks([1000, 1500, 2000, 2500, 3000, 3500, 4000])
+ax.set_yticklabels(['1,000', '1,500', '2,000', '2,500', '3,000', '3,500', '4,000'])
 ax.grid(axis='y', color=GRID, lw=1)
 ax.set_axisbelow(True)
 for s in ('top', 'right', 'left'):
@@ -90,7 +92,7 @@ from matplotlib.lines import Line2D
 h = [Line2D([], [], marker='o', ls='', ms=8, color=c, markeredgecolor=SURF, markeredgewidth=1.5, label=l)
      for c, l in [(COMP, 'computer search'), (HAND, 'by hand'), (UNK, 'method not stated')]]
 h.append(Line2D([], [], marker='o', ls='', ms=8, markerfacecolor=SURF, markeredgecolor=COMP, markeredgewidth=2, label='computed, not yet played on the game'))
-leg = ax.legend(handles=h, loc='upper left', bbox_to_anchor=(0.07, 0.86), frameon=False, fontsize=10, labelcolor=INK2, handletextpad=0.4)
+leg = ax.legend(handles=h, loc='upper left', bbox_to_anchor=(0.07, 0.9), frameon=False, fontsize=10, labelcolor=INK2, handletextpad=0.4)
 
 fig.tight_layout()
 fig.savefig(sys.argv[1], facecolor=SURF)
