@@ -140,6 +140,10 @@ Of the approaches considered, existing open-source code turned out to be the rig
 - `sweeps/` - config lists for `sweep`.
 - `runs/best/` - best sequences found. A sequence is a list of block indices in the
   engine's block order. It's not yet human-friendly; see "Next steps".
+- `tools/blog/` - the animated boards in the blog post: a JavaScript copy of the rules
+  (checked against this engine position by position with `src/bin/frames.rs` and
+  `verify.mjs`), a canvas player, and the script that builds them into the blog. See
+  `tools/blog/README.md`.
 - `tools/replay.html` - single-file page for replaying a sequence by hand on the real game:
   shows each board with the block to tap highlighted. It loads the per-move JSON written by
   `src/bin/export_game.rs`.

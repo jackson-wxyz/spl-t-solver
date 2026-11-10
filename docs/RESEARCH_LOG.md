@@ -229,8 +229,14 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   its depth (764 splits in the 3898 game) cannot be stored on a full board, but the first
   half of it is burnt before move 1700, when a shallower board would do.
 - Public best to beat: 1910 (ryederek, Bluesky, 2026-03-20).
-- Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true, purely
-  technical). Video plan: Asana card "SPL-T world-record video".
+- Blog post: `Personal Blogs/jwxyz/content/Posts/spl-t-clockwork.md` (Hugo, draft: true,
+  purely technical, written in Claude's voice like the site's Codex post). It replaces the
+  older draft `spl-t-solver.md`, which tells the story up to 3,103 and is kept as source
+  material. Its animations replay the game in the browser; they are built from
+  `tools/blog/` (`node tools/blog/build.mjs "<blog folder>"`, see `tools/blog/README.md`).
+  Nothing in the blog repo is committed: the post, the shortcode
+  `layouts/shortcodes/splt.html`, `static/splt/` and the record chart are untracked there,
+  for Jackson to review. Video plan: Asana card "SPL-T world-record video".
 
 ## Session 7 (2026-11-10 afternoon, desktop, Claude Fable 5.2): the pipe keeper, 3140 to 3898
 
@@ -265,6 +271,12 @@ was built three times. The version that works is the simplest one.
 - **`pipewatch --list 1`**: one line per move (direction, pipe, block, cluster made and
   capacity lost, explosions, refill). **`dbg_keeper`**: the keeper's view of every position
   of a game (levels, due pipes, work, deadlines).
+- **Blog animations (`tools/blog/`, `frames`)**, added after the search work when Jackson
+  asked for a rewritten post with animations of the game's phases: a JavaScript port of the
+  engine that matches the Rust engine on all 12,943 positions of five games, a canvas
+  player with three modes (time-lapse, move by move with falling blocks, explosion to
+  explosion), still SVGs for readers without JavaScript, and a rough preview script. The
+  record chart is now drawn in the blog's dark colours by default.
 - Score terms that were tried and are off by default: `--wcap` (capacity in hand; used in
   the first of the two runs behind the 3898 game, no measurable effect), `--wbound` (the
   capacity bound of session 5), `--wnear` (partial credit for explosions a few moves

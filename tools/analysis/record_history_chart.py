@@ -2,15 +2,21 @@
 
 Dates before 2026 are approximate: read off ryederek's chart (2026-03-20 version), except Josh Holder's
 1196, dated by his write-up (published 2022-09-16), which also fixes Becker's 1258 / 1277 as later.
-usage: python tools/analysis/record_history_chart.py OUT.png  (the blog uses jwxyz/static/graphs/spl-t-record-history.png)
+usage: python tools/analysis/record_history_chart.py OUT.png [--light]
+(the blog uses jwxyz/static/graphs/spl-t-record-history.png; its pages are dark, so dark is the default)
 """
 import sys
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-INK, INK2, MUTED, GRID, SURF = '#0b0b0b', '#52514e', '#8a8985', '#e6e5e1', '#fcfcfb'
-COMP, HAND, UNK = '#2a78d6', '#eb6834', '#8a8985'   # computer search / by hand / not stated
+if '--light' in sys.argv:
+    INK, INK2, MUTED, GRID, SURF = '#0b0b0b', '#52514e', '#8a8985', '#e6e5e1', '#fcfcfb'
+    COMP, HAND, UNK = '#2a78d6', '#eb6834', '#8a8985'   # computer search / by hand / not stated
+else:
+    # The blog's own colours: page background, body text, muted text.
+    INK, INK2, MUTED, GRID, SURF = '#f1e7e7', '#D8CBCC', '#A59090', '#3d1a1a', '#1E0000'
+    COMP, HAND, UNK = '#5fb0ff', '#ff9a5c', '#b3a0a0'
 
 # (decimal year, splits, who, method)
 recs = [
@@ -47,7 +53,7 @@ for x, y, *_ in recs:
         ys.append(ys[-1])
     xs.append(x)
     ys.append(y)
-ax.plot(xs, ys, color=INK2, lw=2, zorder=2, solid_joinstyle='miter')
+ax.plot(xs, ys, color=MUTED, lw=2, zorder=2, solid_joinstyle='miter')
 # The solver's game: dashed, because it has not been played on the real game.
 ax.plot([recs[-1][0], SOLVER[0], SOLVER[0]], [1910, 1910, SOLVER[1]], color=COMP, lw=2, ls=(0, (4, 3)), zorder=2)
 
