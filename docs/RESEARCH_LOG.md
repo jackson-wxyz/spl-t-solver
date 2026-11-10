@@ -23,9 +23,10 @@ worked, what didn't, and what I'd do next. Read [README.md](../README.md) and
   before that the record was 1277 (Jonathon Becker / @mangosquash, by hand, 2022). Nothing
   from this solver has been played on the real game yet; `tools/replay.html` exists for
   that.
-- **Best game: 2620** (session 3, overnight). The ratchet re-searches the tail of the best
-  games with fresh seeds and a different beam setting each time; it took the 2064 game to 2620
-  in one night (see "Overnight results" under session 3).
+- **Best game: 3012** (session 5). The ratchet (re-search the tail of the best games
+  with fresh seeds and varied settings) took a 2064 game to 2670; iterated local search
+  with guided rollouts (kick the game, follow its own schedule to complete it, polish)
+  took that past 3,000 in under an hour. See "Session 5".
 - **The bottleneck was the evaluation function, not compute.** Session 1 proved it (beam
   widths 50-4000 from move 900 of the 1208 game all died at 1035-1077); session 2 fixed it.
 
@@ -186,25 +187,164 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   children) far better than the engine itself. The engine is branchy, with irregular
   per-board loops.
 
-## Resume here (session 4, 2026-11-07 afternoon: more ratchet runs in progress)
+## Resume here (session 5, 2026-11-10: local search running)
 
-- **Best verified game: 2620** (`runs/best/ratchet_2620.txt`, found by the overnight pool
-  ratchet as `runs/ratchet/pool/best_2620.txt`; hand-replay data
-  `runs/best/ratchet_2620.json`). The page (artifact
-  https://claude.ai/artifact/TFs2adq7eKa8naU47FX2Ag, version 4) and the blog draft show it.
-- **Running** (queue workers, detached): `60-v5.jobs` started 12:32. Worker A runs
-  `runs/ratchet/v5_pool` (10 h) and worker B runs `runs/ratchet/v5_deep` (4 h), then
-  `70-v5-night.jobs` (`runs/ratchet/v5_night`, 10 h). `python -I tools/queue/summary.py`
-  shows progress; `touch runs/queue/STOP` stops the workers after their current job.
-- **When they finish**: `bash tools/queue/finalize.sh` verifies the longest game anywhere,
-  copies it to `runs/best/`, exports the replay JSON and rebuilds `tools/viz/data.js`. Then
-  add the new run names to `RLAB` / `RCOL` in `tools/viz/index.html` (unlabelled ratchet
-  runs are hidden), republish the page, and update the numbers in the blog draft (its
-  header comment lists every place) and in the README status table.
+- **Best verified game: 3012** (`runs/best/game_3012.txt`; hand-replay data next to it as `.json`).
+  Found by `ils` (kick + guided polish, see "Session 5"). `replay` checks it from move one.
+- **Running / queue**: two local-search workers on the main line (`runs/ratchet/ils_a`, `ils_b`, started 04:16 for 8 h, reading each other's best game every 200 iterations), then `95-lineages-later.jobs` (the same search on games from other openings: `lin_nc60` 3 h, `lin_std2` 2 h). `python -I tools/queue/summary.py` shows every run;
+  `touch runs/queue/STOP` stops the workers after their current job.
+- **To finalize after a run**: `bash tools/queue/finalize.sh` (verifies the longest game on
+  disk, copies it to `runs/best/`, exports the replay JSON, rebuilds `tools/viz/data.js`),
+  then republish `tools/viz/index.html` (artifact
+  https://claude.ai/artifact/TFs2adq7eKa8naU47FX2Ag; new run names need a label in `RLAB`),
+  update the numbers in the blog draft (its header comment lists every place), re-run
+  `tools/analysis/record_history_chart.py` with the new `SOLVER`, and update the README
+  table and the Asana card.
+- **Before a real-game replay**: run `refills` on the game. It lists every refill situation
+  the game relies on; the ones the published record games never exercised are where the
+  emulator could differ from the real game (see "Session 5", last bullet of "Findings").
 - Public best to beat: 1910 (ryederek, Bluesky, 2026-03-20).
 - Blog draft: `Personal Blogs/jwxyz/content/Posts/spl-t-solver.md` (Hugo, draft: true, purely
-  technical; Jackson approved it on 2026-11-07). Video plan: Asana card "SPL-T world-record
-  video" on the Posts, Essays, and Videos board.
+  technical). Video plan: Asana card "SPL-T world-record video".
+
+## Session 5 (2026-11-10, desktop, Claude Fable 5.2): guided local search, 2670 to 3012
+
+Jackson suggested five directions: CPU work, declaring a game lost early ("checkmate"),
+learning a better evaluator from the long games, the worry that everything descends from
+one game, and an opening that delays the first point blocks. This session tried all five.
+The big result came from a sixth thing that the checkmate analysis led to.
+
+### What changed
+
+- **Guided rollouts** (`rollout_beam`, `--guide 1`). A rollout that plays the move the
+  game being re-searched made at the same split count, whenever a free block with exactly
+  that position and size exists, and the heuristic's move otherwise. From a position on
+  that game it replays the rest of it, so the node's value is its true known value instead
+  of a greedy rollout's guess. From a position that deviated, it tests whether the
+  deviation can rejoin the game's schedule and what that does to the ending. A beam using
+  only this rollout (`--policy none`) is a local search around the game: it can never
+  return a shorter game, and a search step costs about 1 s instead of 5-50 s.
+- **Ending cache** (`EndCache`): guided rollouts stop at the first position an earlier
+  rollout already played out. A cached ending that would be a new best is replayed first,
+  so results are exact.
+- **`polish`**: guided-only beam rounds, each guided by the current game, until a round
+  finds nothing longer. **`kick`**: play a different move at move t and complete the game
+  by following the original.
+- **`ils`** (iterated local search): pick a pool game, kick it somewhere 75-450 moves
+  before its end, polish from the move after the kick, keep the result if it is longer
+  (or, half the time, if it ties: a neutral step). With `--beam P` a fraction of iterations
+  are ordinary rollout-beam re-searches of the tail, followed by the same polish.
+- **`abtest`**: paired comparison of settings on tail re-search attempts (same parent, cut
+  and seed for every arm). Everything below that says "paired" used it.
+- **`doom`**, `search::passive_bound`: the capacity bound described under Findings.
+- **`nbhd`**, **`polcmp`**, **`opening`** + `opening_corr.py`, **`refills`**: analysis tools
+  for the experiments below. `rbeam --nocluster D` forbids cluster-making moves in the
+  first D moves while another move exists.
+- Heuristic factors are per search configuration now (no process global), so one process
+  can compare several.
+
+### Results
+
+- **2670 to 2690** in one 22-second guided beam, after 9 worker-hours of the unguided
+  ratchet had found nothing. The guided beam then returned 2690 every time: it converges
+  to a local optimum in one or two attempts.
+- **`ils` from the 2690 pool** (one worker, six threads): 2694, 2711, 2715, 2721 in the
+  first 16 minutes, **2812** at 32 minutes (one kick, +91), 2821, 2855, **2963** (a beam
+  attempt, +108), 3007 and **3011** at 37 minutes; then 3012 from a second run. All verified
+  with `replay`, with the engine's slow reference build (`--features reference`), and by
+  replaying the 3012, 3011 and 2670 games in Josh Holder's original Python emulator
+  (`tools/analysis/pyreplay.py`): it accepts every move and the game ends on the last one.
+- **What the 2812+ games do differently: two pipes fire in unison.** From about move 2415
+  the two middle pipes hold identical staircases and explode on the same move (the
+  ratchet's games already had those two pipes within a few counts of each other at move
+  2400; the local search turned that into an exact, lasting cycle). Their two
+  2x2 holes then refill as one 4x2 block, worth 7 splits instead of 6. With the third pipe
+  firing one move earlier (3 splits), the three pipes return exactly 10 splits every 10
+  moves: a cycle that repeats move for move, with the staircase 2 / 23 / 65 / 148 / 317 /
+  654 / 1332 / 2690 satisfying v(k+1) = 2 (v(k) + 10) at every level. The fourth pipe
+  holds stuck clusters and fires only occasionally. The session-2 bound analysis listed
+  bigger refills as the way past about 3,200; this is the search finding that by itself.
+  The 4x2 refill after a paired explosion also occurs 12 times in Josh Holder's 1196 game,
+  which was played on the real game, so the rule the cycle depends on is a tested one.
+- **Why it stops near 3,000, and what would go further.** A pipe eight clusters deep must
+  fire every n/265 moves. The three live pipes supply exactly 10 splits per cycle, which
+  matches n = 2,650; by n = 3,000 the pipes want 11.3 and the game is living off the fourth
+  pipe's occasional explosions. The exact ten-move cycle lasts from about 2,600 to 2,740
+  and then stretches until it breaks. With the fourth pipe healthy the same structure would
+  supply 13 per cycle (good to about n = 3,450), and two unison pairs 14 (about 3,700). In
+  this lineage the fourth pipe turns into a stack of stuck clusters between moves 2,380 and
+  2,560, so a longer game needs a different history from about move 2,350 on. That is the
+  obvious next target. Note that unison does not arise by itself: two pipes with the same
+  period keep whatever lag they have (a lag of d moves reproduces itself to within d/128
+  per cycle), and the lag only changes when a pipe has two clusters explode together.
+- The time-aligned follower works especially well on such a cycle, because the schedule it
+  follows repeats.
+
+### Findings on the five ideas
+
+- **"Checkmate" (declare a game lost early).** A capacity bound does this: every split
+  costs one unit of capacity (sum of area - 1 over free blocks) and capacity only returns
+  when point blocks explode, so fast-forward the board with no splits and stop at the
+  first explosion the capacity in hand cannot reach. Along the 2670 game this bound equals
+  the moves actually left at every position in the last 70 moves, to the move. So the end
+  is decided 70 moves ahead, a new cluster made in that window can never explode in time,
+  and the game played out exactly what the bound allowed. That is why ratchet cuts under
+  about 100 moves never changed the length. As a search signal it did not help: adding the
+  chain left at the end of a rollout to its score changed nothing (paired, -0.8 +/- 3.1
+  with plain rollouts), and a play-out policy that picks the move leaving the longest chain
+  survives 104 moves from late positions against greedy's 139. Jackson's guess was right
+  that it saves no time either: doomed lines already die quickly in rollouts.
+- **CPU.** A heuristic rollout move costs about 3 microseconds; there is no large factor
+  left there. The gain came from not needing heuristic rollouts: guided-only evaluation
+  plus the ending cache make a local-search step roughly ten times cheaper than a ratchet
+  attempt, and each step is far more likely to help.
+- **A better evaluator learned from the long games.** Three attempts, all null. (1) Tuning
+  the heuristic's 14 factors on late-game positions only (move 2000 on, four long games):
+  greedy survival 113.8 to 115.4 on the training games and 128.2 to 124 on two held-out
+  games, with the five core factors unmoved, the same as session 3's whole-game tuning.
+  (2) The chain look-ahead policy above: worse. (3) A look-ahead that refuses moves leading
+  to a forced end within 8 moves: +2% (139.3 to 142.3). So greedy play dies in the late
+  game for strategic reasons, not from avoidable blunders, and the long games are a better
+  guide as schedules to follow (guided rollouts) than as training data for the heuristic.
+  Stochastic rollouts remain worth their cost in unguided beams (paired, +29 +/- 6 moves
+  for two extra rollouts).
+- **One contingent branch?** Partly answered. The old ratchet took a 2073 game with a
+  different opening to 2387 in 5 minutes, and the local search (with 30% beam attempts)
+  took the same starting pool to 2349 in 64 minutes (`runs/ratchet/lin_std`) before it
+  was stopped to give the main line both workers. So other openings climb through the
+  2300s the way the main lineage did; whether they reach its level is still open, and
+  `95-lineages-later.jobs` continues that run.
+- **Delaying the first point blocks.** In 118 from-scratch games the first cluster comes at
+  move 5-22 and its timing has no significant rank correlation with length (+0.13; 0.18
+  would be significant). Forcing it: with no cluster allowed in the first 30 moves, twelve
+  width-100 runs averaged 1370 (baseline 1513, n = 40, sd 234). With no cluster until none
+  can be avoided (the first then comes around move 58), two of twelve runs collapsed at
+  about 250 and the other ten averaged 1637, best 2086. So a full delay may help when the
+  search survives it, and it does not lose anything obvious. `runs/ratchet/lin_nc60`
+  (in `95-lineages-later.jobs`) runs the local search on three of those games for 3 hours,
+  to see whether the lineage ends up anywhere different. Why it cannot matter much: capacity
+  is conserved, so splits made early are not extra, and the late game's difficulty is set
+  by the split count itself (a new cluster is worth the split count), not by how long ago
+  the first cluster was made.
+- **How local the landscape is** (`nbhd`): of about 1,200 single deviations in the last
+  500 moves of a long game, 25-37% rejoin and end on exactly the same move, about 1.5% end
+  1-9 moves short, the rest end a median of 70-100 moves short, and none ends later. So
+  improvements are never one move away; the guided beam finds them by drifting through the
+  equal-length rejoining variants, and `ils` by repairing a collapsed kick.
+- **Steering a beam towards unison did nothing**: a score penalty on how far neighbouring
+  pipes are from identical staircases (`--wsync`, `pipes::unison_dist`) left beam results
+  from mid-game cuts unchanged (five paired attempts, +1.6 and -6.0 moves for weights 2 and
+  8). The lag between two pipes is not something single moves change.
+- **Other paired results**: a to-do-list follower (play the earliest pending guide move
+  that is available, instead of the move for the current split count) rejoins 40% more
+  often but gave the same kick-and-polish results (+1.1 +/- 2.9); polishing a plain beam
+  result adds 14 +/- 6.5 moves but leaves it 59 below its parent on average; kicks 450-1500
+  moves from the end never helped (0 of 60); ten polish rounds instead of three made no
+  difference; polish width 300 instead of 100 found slightly more at 2.5 times the cost.
+- **Emulator risk for a real-game replay.** The long games use a few refill situations
+  that the published record games never produced (for example 16 cluster blocks exploding
+  into one 4x4 block, at move 552). `refills GAME` lists them with the move where each
+  first happens. The paired 4x2 refill the late cycle depends on is not one of them.
 
 ## Session 3 (2026-11-06 evening, desktop, Claude Opus 5.5): the ratchet
 

@@ -52,3 +52,32 @@ pub fn twins(b: &Board, ratio: f64, min_v: u16) -> u32 {
     }
     n
 }
+
+/// How far neighbouring pipes are from firing in unison: per pipe pair in `pairs` (bit 0:
+/// pipes 0+1, bit 1: pipes 1+2, bit 2: pipes 2+3), the sum over cluster levels (bottom up)
+/// of min(1, |a - b| / (2 + 5% of their mean)), with 1 for a level only one pipe has.
+/// 0 means identical staircases. Two such pipes explode on the same moves, and their two
+/// holes then refill as one 4x2 block worth 7 splits instead of two 2x2 blocks worth 6.
+/// The distance shrinks by itself once new clusters go onto both pipes at nearly the same
+/// time: halving halves every difference, and an offset between the two bottoms halves and
+/// changes sign each cycle.
+pub fn unison_dist(b: &Board, pairs: u8) -> f32 {
+    let c: [Vec<u16>; 4] = [clusters(b, 0), clusters(b, 1), clusters(b, 2), clusters(b, 3)];
+    let mut d = 0.0f32;
+    for p in 0..3 {
+        if pairs >> p & 1 == 0 {
+            continue;
+        }
+        let n = c[p].len().max(c[p + 1].len());
+        for k in 0..n {
+            d += match (c[p].get(k), c[p + 1].get(k)) {
+                (Some(&x), Some(&y)) => {
+                    let (x, y) = (x as f32, y as f32);
+                    ((x - y).abs() / (2.0 + 0.025 * (x + y))).min(1.0)
+                }
+                _ => 1.0,
+            };
+        }
+    }
+    d
+}

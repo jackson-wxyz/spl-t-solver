@@ -12,8 +12,12 @@ line=$(./target/release/replay "$best" | tail -1)
 echo "$line"
 case "$line" in *"game over - matches"*) ;; *) echo "verification failed for $best"; exit 1 ;; esac
 n=$(echo "$line" | sed -E 's/.*: ([0-9]+) splits replayed.*/\1/')
-dest="runs/best/ratchet_${n}.txt"
+# Second opinion from the original Python emulator, when a checkout of it is at hand.
+for ref in "josh holder SPLT reference/SPLT" reference/josh-holder-SPLT; do
+  if [ -f "$ref/core_update.py" ]; then python tools/analysis/pyreplay.py "$ref" "$best" | tail -1; break; fi
+done
+dest="runs/best/game_${n}.txt"
 cp "$best" "$dest"
-./target/release/export_game "$dest" "runs/best/ratchet_${n}.json"
+./target/release/export_game "$dest" "runs/best/game_${n}.json"
 python -I tools/analysis/build_data.py --game "$dest"
-echo "best game: $dest ($n splits); replay JSON: runs/best/ratchet_${n}.json; page data rebuilt in tools/viz/data.js"
+echo "best game: $dest ($n splits); replay JSON: runs/best/game_${n}.json; page data rebuilt in tools/viz/data.js"

@@ -4,7 +4,7 @@ An attempt to find very long games of Simogo's *SPL-T* (2015). The score is the 
 splits made before no split is possible. Goal: understand what optimal play looks like and,
 ideally, beat the world record.
 
-## Status (2026-11-07, session 4)
+## Status (2026-11-10, session 5)
 
 | | splits |
 |---|---|
@@ -15,12 +15,14 @@ ideally, beat the world record.
 | Best score posted publicly: ryederek on Bluesky, March 2026 (Legacy Collection) | 1910 |
 | Rollout beam, from scratch (`rbeam`, width 100, k 4, cap 200, seed 3, ~40 s on the desktop) | 1885 (`runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt`) |
 | Rollout beam, from scratch, two stochastic rollouts per child (width 100, k 4, cap 200, `--stoch 2`, seed 1, ~100 s) | 2064 (`runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt`) |
-| **Ratchet** from the 2064 game (re-search the best games' tails with fresh seeds and varied settings; one night on the desktop) | **2620** (`runs/best/ratchet_2620.txt`; hand-replay data `runs/best/ratchet_2620.json`) |
+| Ratchet from the 2064 game (re-search the best games' tails with fresh seeds and varied settings; about a day of search) | 2670 (`runs/best/ratchet_2670.txt`) |
+| **Iterated local search** from the 2670 game (`ils`: kick the game, complete it by following its own schedule, polish with guided search; first hours) | **3012** (`runs/best/game_3012.txt`; hand-replay data `runs/best/game_3012.json`) |
 | Rollout beam resuming Josh Holder's 1208 game at move 700 | 1984 (`runs/best/from_josh1208_at700_1984_rbeam_w100_k4_r300.txt`) |
 
 The engine replays all four published record games move for move, and every sequence in
 `runs/best/` is re-verified by `replay`, which checks the engine's invariants after every
-move. What has **not** been done is playing a solver sequence on the real game: a record
+move. The best game has also been replayed in Josh Holder's original Python emulator
+(`tools/analysis/pyreplay.py`), which accepts every move and ends on the last one. What has **not** been done is playing a solver sequence on the real game: a record
 claim needs that, and the sequences are block-index lists in engine order, so it needs the
 human replay tool listed under "Next steps".
 
@@ -69,7 +71,17 @@ Of the approaches considered, existing open-source code turned out to be the rig
   (`weighting.py`), checked weight-for-weight against his Python at all 4,590 record
   positions. Also the rollout policies built on it (greedy, avoid-big, softmax-sampled).
 - `src/pipes.rs` - pipe-level structure (cluster values per 2-column pipe, "twins" count).
-- `src/bin/ratchet.rs` - **the current best solver**: repeatedly re-searches the tail of
+- `src/bin/ils.rs` - **the current best solver**: iterated local search on finished games.
+  Each step kicks a game (plays a different move somewhere in its last few hundred moves and
+  completes it by following the original), then polishes the result with a guided beam
+  (rollouts replay the game's own moves wherever the same block still exists), and keeps
+  it if it is longer. A step takes about a second. See `docs/RESEARCH_LOG.md`, "Session 5".
+- `src/bin/abtest.rs` - paired comparison of search settings on tail re-search attempts.
+- `src/bin/doom.rs`, `nbhd.rs`, `polcmp.rs`, `opening.rs`, `refills.rs` - analysis tools:
+  the capacity bound against moves actually left; the single-deviation neighbourhood of a
+  game; play-out policies compared by survival; opening statistics; which refill situations
+  a game relies on (to check before replaying it on the real game).
+- `src/bin/ratchet.rs` - the session 3-4 solver: repeatedly re-searches the tail of
   the best games found so far with `rbeam`'s search and keeps anything at least as long.
 - `tools/queue/` - job queue for long runs (`runner.sh`, `summary.py`).
 - `src/rollout_beam.rs`, `src/bin/rbeam.rs` - beam search over the heuristic's top-k
@@ -115,6 +127,7 @@ Run these from the project folder. Requires Rust (`rustup`).
 ```
 cargo build --release
 cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 200 --seed 3
+cargo run --release --bin ils -- --start runs/best/game_3012.txt --hours 1 --beam 0.05 --out runs/ratchet/try
 cargo run --release --bin rbeam -- --width 100 --k 4 --rollout 300 --prefix reference/josh-holder-SPLT/sequences/1208seq.txt --keep 700
 cargo run --release --bin replay -- runs/best/scratch_1885_rbeam_w100_k4_r200_s3.txt --final
 cargo run --release --bin paranoid -- --secs 60

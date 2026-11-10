@@ -6,7 +6,7 @@
 :root {
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
-  --accent: #2a78d6; --accent-2: #eb6834; --series-3: #1baf7a; --gray: #898781;
+  --accent: #2a78d6; --accent-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --gray: #898781;
   --seq-lo: #cde2fb; --seq-hi: #0d366b;
   --ord-1: #86b6ef; --ord-2: #3987e5; --ord-3: #1c5cab; --ord-4: #0d366b;
   --wash: rgba(42,120,214,0.10);
@@ -18,7 +18,7 @@
   :root:not([data-theme="light"]) {
     --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
-    --accent: #3987e5; --accent-2: #d95926; --series-3: #199e70; --gray: #898781;
+    --accent: #3987e5; --accent-2: #d95926; --series-3: #199e70; --series-4: #c98500; --gray: #898781;
     --seq-lo: #0d366b; --seq-hi: #cde2fb;
     --ord-1: #184f95; --ord-2: #2a78d6; --ord-3: #6da7ec; --ord-4: #b7d3f6;
     --wash: rgba(57,135,229,0.14);
@@ -28,7 +28,7 @@
 :root[data-theme="dark"] {
   --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
-  --accent: #3987e5; --accent-2: #d95926; --series-3: #199e70; --gray: #898781;
+  --accent: #3987e5; --accent-2: #d95926; --series-3: #199e70; --series-4: #c98500; --gray: #898781;
   --seq-lo: #0d366b; --seq-hi: #cde2fb;
   --ord-1: #184f95; --ord-2: #2a78d6; --ord-3: #6da7ec; --ord-4: #b7d3f6;
   --wash: rgba(57,135,229,0.14);
@@ -99,9 +99,9 @@ td:first-child, th:first-child { text-align: left; }
 <header>
   <div class="eyebrow" id="eyebrow">Simogo's SPL-T · a solver's game</div>
   <h1>SPL-T Clockwork</h1>
-  <p class="lede">How a computer-found game of SPL-T outlasts every score on record: four columns of point blocks kept in a halving chain, a beam search that steers by how long a simple policy would survive, and a lot of luck in where each run wanders.</p>
+  <p class="lede">How a computer-found game of SPL-T outlasts every score on record: four columns of point blocks kept in a halving chain, a beam search that steers by how long a simple policy would survive, and a local search that reworks the best game's ending by following its own schedule.</p>
   <div class="kpis">
-    <div class="kpi hero"><div class="v" id="kpi-best">–</div><div class="l">splits, the solver's best game: a rollout beam from an empty board, then the ratchet re-searching its tail</div></div>
+    <div class="kpi hero"><div class="v" id="kpi-best">–</div><div class="l">splits, the solver's best game: a rollout beam from an empty board, a ratchet re-searching its tail, then a local search around the game itself</div></div>
     <div class="kpi"><div class="v">1,910</div><div class="l">best score posted publicly (ryederek, March 2026, on the Legacy Collection)</div></div>
     <div class="kpi"><div class="v">1,277</div><div class="l">the 2022 record, Jonathon Becker, by hand</div></div>
     <div class="kpi"><div class="v" id="kpi-runs">50</div><div class="l">solver runs in the distribution below</div></div>
@@ -184,8 +184,9 @@ td:first-child, th:first-child { text-align: left; }
 
 <section id="s-ratchet">
   <div class="sec-head">
-    <h2>The ratchet: re-searching the tail of the best game</h2>
-    <p>Because single runs vary so much, the long games come from a second search layered on top. The ratchet takes the best game so far, cuts it some number of moves before the end, runs a fresh beam from there with a new seed, and keeps the result only if it is at least as long. Cuts less than about 120 moves from the end never change the length; cuts 120 to 400 back produce the gains; deeper cuts cost the most and never paid off. The version that keeps a pool of the eight longest games, and draws each attempt's width, rollout length and number of randomized rollouts at random, gained four times as much overnight as the single-game, single-setting version (2,277 &rarr; 2,620 against 2,248 &rarr; 2,332).</p>
+    <h2>The ratchet and the local search: reworking the tail of the best game</h2>
+    <p>Because single runs vary so much, the long games come from a second search layered on top. The ratchet takes the best game so far, cuts it some number of moves before the end, runs a fresh beam from there with a new seed, and keeps the result only if it is at least as long. Cuts less than about 100 moves from the end never change the length (the last 70 moves of a game are already fixed by how much splitting capacity is on the board); cuts 120 to 400 back produce the gains. Keeping a pool of the eight longest games and varying each attempt's settings took a 2,064 game to 2,670, and then stalled.</p>
+    <p>The local search got past that. Its rollouts do not ask the heuristic what to do: they replay the move the best game itself made at the same point, whenever the same block is still there. A position on the game is then worth exactly what the game went on to score, and a position that deviates is judged by whether it can get back onto the game's schedule and what that does to the ending. Each step kicks the game (plays a different move somewhere in its last 450 moves, which usually costs dozens of moves), then searches for a repair. A step takes about a second, and now and then the repaired game is longer. It passed 3,000 within an hour, partly by discovering that two neighbouring pipes can be made to explode on the same move, which refills them with one wide block worth seven splits instead of six.</p>
   </div>
   <figure>
     <h3>Best game so far, and every attempt, by hours of search</h3>
@@ -198,7 +199,7 @@ td:first-child, th:first-child { text-align: left; }
   <figure>
     <h3>Which cuts pay: result minus the best game, by how far back the cut was</h3>
     <div class="wrap"><svg id="backs" viewBox="0 0 1000 240" aria-label="Ratchet attempts: gain over the best game against cut depth"></svg><div class="tip" id="backs-tip"></div></div>
-    <figcaption>Above the line: the attempt beat the best game and replaced it. On the line: a different game of the same length (the second leg accepts those, which lets the ending drift). Cut depth is on a log scale.</figcaption>
+    <figcaption>Above the line: the attempt beat the best game and replaced it. On the line: a different game of the same length. For the local search the depth is where the kick was made. Depth is on a log scale.</figcaption>
   </figure>
 </section>
 
@@ -238,8 +239,8 @@ td:first-child, th:first-child { text-align: left; }
     <div class="wrap"><svg id="bounds" viewBox="0 0 1000 280" aria-label="Moves between explosions in one pipe, against the move number"></svg><div class="tip" id="bounds-tip"></div></div>
     <figcaption>Simulated pipe: a new cluster worth the move number arrives three moves after each explosion, and every explosion halves the clusters above it (rounding down). Horizontal lines: twelve moves (four pipes refilled with 2×2 blocks) and sixteen (the most any mix of refills could fund). The solver's games achieve about thirteen.</figcaption>
   </figure>
-  <p>An eight-deep pipe falls behind around move 3,200 with plain refills and around 4,000 with perfect ones, and the slack left on the board stretches that by roughly ten percent. So no game can pass about 4,700 splits, and a perfect four-pipe clockwork tops out near 3,800. Josh Holder's own estimates were 3,700 in theory and about 1,800 in practice. My guess for the real maximum is around 3,000: an eight-deep pipe leaves no room for timing errors, every halving rounds down, and the forced alternation of split directions keeps fighting the staggering of the four pipes.</p>
-  <p class="note">Game generated by the rollout beam (heuristic ported from Josh Holder's SPLT emulator); per-move statistics exported from the Rust engine, which replays all four published record games move for move. Nothing here has been replayed on the real game yet.</p>
+  <p>An eight-deep pipe falls behind around move 3,200 with plain refills and around 4,000 with perfect ones, and the slack left on the board stretches that by roughly ten percent. So no game can pass about 4,700 splits, and a perfect four-pipe clockwork tops out near 3,800. Josh Holder's own estimates were 3,700 in theory and about 1,800 in practice. My guess for the real maximum used to be around 3,000, because an eight-deep pipe leaves no room for timing errors, every halving rounds down, and the forced alternation of split directions keeps fighting the staggering of the four pipes. The solver has now passed that by the route the upper line in the chart stands for: two neighbouring pipes that explode on the same move refill as one 4×2 block worth seven splits, not two blocks worth six. With both pairs of pipes doing that, each pipe could afford fourteen moves between explosions, which holds until about move 3,700.</p>
+  <p class="note">Game generated by the rollout beam, the ratchet and the local search (heuristic ported from Josh Holder's SPLT emulator); per-move statistics exported from the Rust engine, which replays all four published record games move for move. Nothing here has been replayed on the real game yet.</p>
 </section>
 </main>
 <script src="data.js"></script>
@@ -489,15 +490,16 @@ td:first-child, th:first-child { text-align: left; }
 
   // ---------- ratchet ----------
   // Only finished, labelled ratchet runs are drawn; runs still in progress are left out until labelled here.
-  const RLAB = { r2064a: 'first leg', r2064b: 'second leg: one game, one setting', pool: 'pool of eight games, varied settings', morning_a: 'two more pools from 2,620 (4 h each, no gain)', morning_b: '' };
-  const RCOL = { r2064a: '--accent', r2064b: '--accent-2', pool: '--series-3', morning_a: '--gray', morning_b: '--gray' };
+  // Runs sharing a colour are one method; only the first of them carries the legend label.
+  const RLAB = { r2064a: 'ratchet, first leg', r2064b: 'ratchet: one game, one setting', pool: 'ratchet: pool of eight games, varied settings', morning_a: '', morning_b: '', v5_pool: '', v5_deep: '', v5_night: '', g1: 'local search: follow the game, kick it, repair it', ils_main: '', ils_a: '', ils_b: '' };
+  const RCOL = { r2064a: '--accent', r2064b: '--accent-2', pool: '--series-3', morning_a: '--series-3', morning_b: '--series-3', v5_pool: '--series-3', v5_deep: '--series-3', v5_night: '--series-3', g1: '--series-4', ils_main: '--series-4', ils_a: '--series-4', ils_b: '--series-4' };
   const RORD = Object.keys(RLAB);
   const RT = (DATA.ratchets || []).filter(r => r.name in RLAB).sort((a, b) => RORD.indexOf(a.name) - RORD.indexOf(b.name));
   function ratchetSeries() {
     return RT.map((r, i) => {
       let best = r.iters.length ? r.iters[0][3] : 0; const steps = [];
       for (const [it, back, res, bestBefore, h] of r.iters) { best = Math.max(bestBefore, best); steps.push([h, best]); if (res > best) { best = res; steps.push([h, best]); } }
-      return { name: r.name, label: RLAB[r.name], color: css(RCOL[r.name] || '--gray'), iters: r.iters, steps };
+      return { name: r.name, label: RLAB[r.name], colorVar: RCOL[r.name] || '--gray', color: css(RCOL[r.name] || '--gray'), iters: r.iters, attempts: r.attempts || r.iters.length, steps };
     });
   }
   function drawRatchet() {
@@ -524,7 +526,7 @@ td:first-child, th:first-child { text-align: left; }
       const last = s.iters[s.iters.length - 1]; d += 'H' + sx(last[4]).toFixed(1);
       el('path', { d, class: 'ln', stroke: s.color }, svg);
       if (!s.label) return;
-      const k = document.createElement('span'); k.className = 'key'; const i2 = document.createElement('i'); i2.style.background = s.color; k.append(i2, document.createTextNode(s.label + ' (' + fmt(s.iters.length) + ' attempts)')); lg.appendChild(k);
+      const k = document.createElement('span'); k.className = 'key'; const i2 = document.createElement('i'); i2.style.background = s.color; const tot = S.filter(x => x.colorVar === s.colorVar).reduce((a, x) => a + x.attempts, 0); k.append(i2, document.createTextNode(s.label + ' (' + fmt(tot) + ' attempts)')); lg.appendChild(k);
     });
     const hit = el('rect', { x: L, y: T, width: W - L - R, height: H - T - B, fill: 'transparent' }, svg);
     hit.addEventListener('pointermove', (e) => {
@@ -534,8 +536,8 @@ td:first-child, th:first-child { text-align: left; }
       tip.style.display = 'block'; const px = e.clientX - r.left, py = e.clientY - r.top; tip.style.left = Math.min(px + 12, r.width - tip.offsetWidth - 4) + 'px'; tip.style.top = Math.max(0, py - 10 - tip.offsetHeight) + 'px';
     });
     hit.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
-    const nIt = S.reduce((a, s) => a + s.iters.length, 0), nUp = S.reduce((a, s) => a + s.iters.filter(x => x[2] > x[3]).length, 0);
-    document.getElementById('ratchet-cap').textContent = `${fmt(nIt)} re-searches over ${hmax.toFixed(1)} hours; ${fmt(nUp)} of them beat the best game at the time. Each dot is one re-search (large dots replaced the best); attempts shorter than ${fmt(ymin)} fall off the bottom. The step lines are the best game at that moment.`;
+    const nIt = S.reduce((a, s) => a + s.attempts, 0), nUp = S.reduce((a, s) => a + s.iters.filter(x => x[2] > x[3]).length, 0);
+    document.getElementById('ratchet-cap').textContent = `${fmt(nIt)} attempts over ${hmax.toFixed(1)} hours of search (idle time between sessions left out); ${fmt(nUp)} of them beat the best game their run had at the time. Each dot is one attempt (large dots replaced the best); for the local search only attempts that tied or beat their parent are drawn, and attempts shorter than ${fmt(ymin)} fall off the bottom. The step lines are each run's best game at that moment.`;
   }
   function drawBacks() {
     const svg = document.getElementById('backs'); svg.innerHTML = '';

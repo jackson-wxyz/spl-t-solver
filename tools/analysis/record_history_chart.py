@@ -24,7 +24,7 @@ recs = [
     (2026.19, 1396, 'ryederek', UNK),
     (2026.22, 1910, 'ryederek', UNK),
 ]
-SOLVER = (2026.85, 2620)
+SOLVER = (2026.86, 3012)
 
 plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 11})
 fig, ax = plt.subplots(figsize=(9, 5.4), dpi=220)
@@ -32,7 +32,7 @@ fig.patch.set_facecolor(SURF)
 ax.set_facecolor(SURF)
 
 # Context lines: original release and the Legacy Collection re-release.
-for x, y, ha, txt in [(2015.80, 2770, 'left', 'SPL-T released (iOS)'),
+for x, y, ha, txt in [(2015.80, 3270, 'left', 'SPL-T released (iOS)'),
                       (2025.93, 1200, 'right', 'Legacy Collection\nreleased (Steam, Switch)')]:
     ax.axvline(x, ymax=1 if ha == 'left' else 0.8, color=MUTED, lw=1, ls=(0, (3, 3)), zorder=1)
     ax.text(x + (0.1 if ha == 'left' else -0.1), y, txt, ha=ha, va='top', color=INK2, fontsize=9.5)
@@ -69,13 +69,13 @@ ax.annotate('', xy=(2022.35, 1240), xytext=(2021.85, 1480),
             arrowprops=dict(arrowstyle='-', color=MUTED, lw=1))
 lab(2026.19, 1396, '1,396', ha='right', dx=0.15)
 lab(2026.22, 1910, '1,910  ryederek (Mar 2026)', ha='right', dx=0.2)
-lab(SOLVER[0], SOLVER[1], '2,620  this solver (Nov 2026)\ncomputed; not yet played', ha='right', dx=0.22)
+lab(SOLVER[0], SOLVER[1], f'{SOLVER[1]:,}  this solver (Nov 2026)\ncomputed; not yet played', ha='right', dx=0.22)
 
 ax.set_xlim(2015.2, 2027.3)
-ax.set_ylim(800, 2800)
+ax.set_ylim(800, 3300)
 ax.set_xticks(range(2016, 2028, 2))
-ax.set_yticks([1000, 1500, 2000, 2500])
-ax.set_yticklabels(['1,000', '1,500', '2,000', '2,500'])
+ax.set_yticks([1000, 1500, 2000, 2500, 3000])
+ax.set_yticklabels(['1,000', '1,500', '2,000', '2,500', '3,000'])
 ax.grid(axis='y', color=GRID, lw=1)
 ax.set_axisbelow(True)
 for s in ('top', 'right', 'left'):

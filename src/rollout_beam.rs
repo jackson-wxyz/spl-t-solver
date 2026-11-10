@@ -52,6 +52,11 @@ pub struct Config {
     /// capacity it could not use (wrong split direction), which makes its length a noisy
     /// measure late in a game; the chain is what a careful finish could still play.
     pub wchain: f32,
+    /// Score penalty per unit of `pipes::unison_dist` (how far neighbouring pipes are from
+    /// identical staircases), for the pipe pairs in `sync_pairs` (bit mask, default 0b101:
+    /// pipes 0+1 and 2+3). Steers a beam towards pipes that fire in unison.
+    pub wsync: f32,
+    pub sync_pairs: u8,
     /// For the first `nocluster` moves of the game, only consider moves that do not create a
     /// cluster, as long as one exists (an opening experiment: delay the first point blocks).
     pub nocluster: usize,
@@ -59,6 +64,10 @@ pub struct Config {
     /// moves back in the guide (same split direction) for a move that still is, before
     /// falling back to the heuristic. That replays a guide move the path skipped earlier.
     pub gscan: usize,
+    /// Guided rollouts use the to-do-list follower (`Todo`) instead of the time-aligned one,
+    /// looking at most `gahead` moves ahead in the guide.
+    pub gtodo: bool,
+    pub gahead: usize,
     /// Reuse the endings of guided rollouts by position (`EndCache`). On by default.
     pub gcache: bool,
     /// `--guide 1`: the caller should set `guide` to the game being re-searched.
@@ -357,8 +366,12 @@ impl Default for Config {
             hparams: "default".to_string(),
             hp: HParams::default(),
             wchain: 0.0,
+            wsync: 0.0,
+            sync_pairs: 0b101,
             nocluster: 0,
             gscan: 0,
+            gtodo: false,
+            gahead: 24,
             gcache: true,
             guided: false,
             guide: None,
@@ -413,8 +426,12 @@ impl Config {
             hparams,
             hp,
             wchain: arg(args, "--wchain").unwrap_or(d.wchain),
+            wsync: arg(args, "--wsync").unwrap_or(d.wsync),
+            sync_pairs: arg(args, "--syncpairs").unwrap_or(d.sync_pairs),
             nocluster: arg(args, "--nocluster").unwrap_or(d.nocluster),
             gscan: arg(args, "--gscan").unwrap_or(d.gscan),
+            gtodo: arg::<u8>(args, "--gtodo").unwrap_or(0) != 0,
+            gahead: arg(args, "--gahead").unwrap_or(d.gahead),
             gcache: arg::<u8>(args, "--gcache").unwrap_or(1) != 0,
             guided: arg::<u8>(args, "--guide").unwrap_or(0) != 0,
             guide: None,
@@ -451,6 +468,9 @@ impl Config {
         if self.nocluster > 0 {
             t.push_str(&format!("_nc{}", self.nocluster));
         }
+        if self.wsync != 0.0 {
+            t.push_str(&format!("_sy{}", self.wsync));
+        }
         t.push_str(&format!("_s{}", self.seed));
         t
     }
@@ -458,7 +478,7 @@ impl Config {
     /// All settings, for RESULT lines.
     pub fn describe(&self) -> String {
         format!(
-            "width={} k={} rollout={} tie={} policy={} stoch={} temp={} wtwin={} wstuck={} stuckt={} wdebt={} maxkids={} rankpen={} hparams={} wchain={} guide={} nocluster={} seed={} noise={}",
+            "width={} k={} rollout={} tie={} policy={} stoch={} temp={} wtwin={} wstuck={} stuckt={} wdebt={} maxkids={} rankpen={} hparams={} wchain={} guide={} nocluster={} wsync={} seed={} noise={}",
             self.width,
             self.k,
             self.cap,
@@ -476,6 +496,7 @@ impl Config {
             self.wchain,
             self.guide.is_some() as u8,
             self.nocluster,
+            self.wsync,
             self.seed,
             self.noise
         )
@@ -496,7 +517,7 @@ enum Kind {
 ///
 /// `cache`, `best_len`: ending cache for the guided rollout and the longest complete game so
 /// far; a cached ending that would beat it is replayed, so every new best is exact.
-fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, best_len: u16) -> (usize, bool, Board, Kind, f32) {
+fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, best_len: u16, st: Todo) -> (usize, bool, Board, Kind, f32) {
     let mut best: Option<(usize, bool, Board, Kind)> = None;
     let mut value = f32::NEG_INFINITY;
     let mut consider = |n: usize, over: bool, b: Board, kind: Kind| {
@@ -522,10 +543,13 @@ fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, be
     }
     if let Some(g) = &cfg.guide {
         let mut b = start.clone();
-        let (mut n, hit) = play_out_guided(&mut b, g, cfg.gscan, &cfg.hp, None, cache);
+        let go = |b: &mut Board, cache: Option<&EndCache>| {
+            if cfg.gtodo { play_out_todo(b, g, st, cfg.gahead, &cfg.hp, None, cache) } else { play_out_guided(b, g, cfg.gscan, &cfg.hp, None, cache) }
+        };
+        let (mut n, hit) = go(&mut b, cache);
         if hit && start.moves as usize + n > best_len as usize {
             b = start.clone();
-            n = play_out_guided(&mut b, g, cfg.gscan, &cfg.hp, None, None).0;
+            n = go(&mut b, None).0;
         }
         consider(n, true, b, Kind::Guided);
     }
@@ -538,12 +562,17 @@ fn rollout(start: &Board, cfg: &Config, seed0: u64, cache: Option<&EndCache>, be
     (n, over, b, kind, value)
 }
 
-fn replay_kind(b: &mut Board, kind: Kind, cfg: &Config) -> Vec<u8> {
+fn replay_kind(b: &mut Board, kind: Kind, cfg: &Config, st: Todo) -> Vec<u8> {
     let (temp, hp) = (cfg.temp, &cfg.hp);
     let mut out = Vec::new();
     match kind {
         Kind::Guided => {
-            play_out_guided(b, cfg.guide.as_ref().expect("guided rollout without a guide"), cfg.gscan, hp, Some(&mut out), None);
+            let g = cfg.guide.as_ref().expect("guided rollout without a guide");
+            if cfg.gtodo {
+                play_out_todo(b, g, st, cfg.gahead, hp, Some(&mut out), None);
+            } else {
+                play_out_guided(b, g, cfg.gscan, hp, Some(&mut out), None);
+            }
         }
         Kind::Det(pol) => {
             while let Some(m) = choose_hp(b, pol, hp) {
@@ -615,6 +644,9 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     let t0 = Instant::now();
     let mut history: Vec<Vec<(u32, u8)>> = Vec::new();
     let mut frontier: Vec<Board> = vec![start.clone()];
+    // To-do follower state per frontier node (placeholders unless cfg.gtodo with a guide).
+    let use_todo = cfg.gtodo && cfg.guide.is_some();
+    let mut ftodo: Vec<Todo> = vec![Todo::at(if use_todo { prefix.len() } else { 0 })];
     // Best complete game: (splits, level of the node the rollout started from, node index,
     // kind). Level L node = position after L moves past the start; its rollout is replayed
     // at the end (rollouts are deterministic). If the start is already over, the prefix is
@@ -627,15 +659,22 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     loop {
         let level = history.len();
         // Generate children (parent, move, rank, hash, board), dedup, evaluate the distinct ones.
-        let mut children: Vec<(u32, u8, u8, u64, Board)> = frontier
+        let ftodo_ref = &ftodo;
+        let mut children: Vec<(u32, u8, u8, u64, Board, Todo)> = frontier
             .par_iter()
             .enumerate()
             .flat_map_iter(|(pi, node)| {
                 let mv = top_k_moves_opt(node, cfg.k, &cfg.hp, (node.moves as usize) < cfg.nocluster);
                 mv.into_iter().enumerate().map(move |(r, m)| {
+                    let mut st = ftodo_ref[pi];
+                    if use_todo {
+                        let bl = node.blocks[m as usize];
+                        st.consume([bl.x, bl.y, bl.w, bl.h], node.moves as usize, cfg.guide.as_ref().unwrap(), cfg.gahead);
+                    }
                     let mut c = node.clone();
                     c.play(m as usize);
-                    (pi as u32, m, r as u8, c.hash64(), c)
+                    let h = c.hash64() ^ if use_todo { st.key() } else { 0 };
+                    (pi as u32, m, r as u8, h, c, st)
                 })
             })
             .collect();
@@ -646,14 +685,14 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
         children.par_sort_unstable_by_key(|c| c.3);
         children.dedup_by_key(|c| c.3);
         let best_len = best.0;
-        let scored: Vec<(u32, u8, f32, u16, bool, Board, Kind)> = children
+        let scored: Vec<(u32, u8, f32, u16, bool, Board, Kind, Todo)> = children
             .into_par_iter()
-            .map(|(pi, m, r, _, c)| {
+            .map(|(pi, m, r, _, c, st)| {
                 if c.is_over() {
-                    return (pi, m, f32::NEG_INFINITY, c.moves, true, c, Kind::Det(Policy::Greedy));
+                    return (pi, m, f32::NEG_INFINITY, c.moves, true, c, Kind::Det(Policy::Greedy), st);
                 }
                 let seed0 = seed ^ (level as u64) << 40 ^ (pi as u64) << 8 ^ m as u64;
-                let (n, over, end, kind, value) = rollout(&c, cfg, seed0, cache.as_ref(), best_len);
+                let (n, over, end, kind, value) = rollout(&c, cfg, seed0, cache.as_ref(), best_len, st);
                 let reached = c.moves + n as u16;
                 let mut s = value;
                 if !over {
@@ -669,11 +708,14 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
                 if cfg.rank_pen != 0.0 {
                     s -= cfg.rank_pen * r as f32;
                 }
+                if cfg.wsync != 0.0 {
+                    s -= cfg.wsync * crate::pipes::unison_dist(&c, cfg.sync_pairs);
+                }
                 if cfg.noise > 0.0 {
                     let z = mix(seed ^ (level as u64) << 40 ^ (pi as u64) << 8 ^ m as u64);
                     s += cfg.noise * (z >> 40) as f32 / (1u64 << 24) as f32;
                 }
-                (pi, m, s, reached, over, c, kind)
+                (pi, m, s, reached, over, c, kind, st)
             })
             .collect();
         rollouts += scored.len() as u64;
@@ -688,12 +730,12 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
         if let Some(f) = forced {
             best = (scored[f].3, level + 1, 0, scored[f].6); // index fixed below
         }
-        let mut live: Vec<(u32, u8, f32, u16, Board)> = Vec::with_capacity(scored.len());
-        for (j, (pi, m, s, reached, _over, c, _)) in scored.into_iter().enumerate() {
+        let mut live: Vec<(u32, u8, f32, u16, Board, Todo)> = Vec::with_capacity(scored.len());
+        for (j, (pi, m, s, reached, _over, c, _, st)) in scored.into_iter().enumerate() {
             if Some(j) == forced {
-                live.push((pi, m, f32::INFINITY, reached, c));
+                live.push((pi, m, f32::INFINITY, reached, c, st));
             } else if !c.is_over() {
-                live.push((pi, m, s, reached, c));
+                live.push((pi, m, s, reached, c, st));
             }
         }
         if live.is_empty() {
@@ -726,14 +768,14 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
         if let Some(w) = tree.as_mut() {
             let depth = start.moves as usize + level + 1;
             let mut line = format!("{}", level + 1);
-            for &(pi, m, s, reached, _) in &live {
+            for &(pi, m, s, reached, _, _) in &live {
                 line.push_str(&format!(" {pi},{m},{:.1},{}", s, reached as i64 - depth as i64));
             }
             line.push('\n');
             w.write_all(line.as_bytes()).unwrap();
         }
-        history.push(live.iter().map(|&(pi, m, _, _, _)| (pi, m)).collect());
-        frontier = live.into_iter().map(|(_, _, _, _, b)| b).collect();
+        history.push(live.iter().map(|&(pi, m, _, _, _, _)| (pi, m)).collect());
+        (frontier, ftodo) = live.into_iter().map(|(_, _, _, _, b, st)| (b, st)).unzip();
 
         if progress && (level + 1) % 50 == 0 {
             eprintln!(
@@ -759,10 +801,15 @@ pub fn run(prefix: &[u8], cfg: &Config, mut tree: Option<&mut dyn std::io::Write
     let mut moves = prefix.to_vec();
     moves.extend(rev.into_iter().rev());
     let mut b = Board::new();
-    for &m in &moves {
+    let mut st = Todo::at(if use_todo { prefix.len() } else { 0 });
+    for (i, &m) in moves.iter().enumerate() {
+        if use_todo && i >= prefix.len() {
+            let bl = b.blocks[m as usize];
+            st.consume([bl.x, bl.y, bl.w, bl.h], i, cfg.guide.as_ref().unwrap(), cfg.gahead);
+        }
         b.play(m as usize).expect("illegal move in reconstructed path");
     }
-    moves.extend(replay_kind(&mut b, bkind, cfg));
+    moves.extend(replay_kind(&mut b, bkind, cfg, st));
     assert!(b.is_over(), "reconstructed game not over");
     assert_eq!(b.moves, splits, "reconstructed game length mismatch");
     Outcome { moves, splits, rollouts, secs: t0.elapsed().as_secs_f64() }
@@ -815,9 +862,16 @@ pub fn kick(moves: &[u8], t: usize, pick: u64, k: usize, cfg: &Config) -> Option
     let alt = alts[(mix(pick) % alts.len() as u64) as usize];
     let mut out = moves[..t].to_vec();
     out.push(alt);
+    let bl = b.blocks[alt as usize];
     b.play(alt as usize).unwrap();
     let guide = guide_of(moves);
-    play_out_guided(&mut b, &guide, cfg.gscan, &cfg.hp, Some(&mut out), None);
+    if cfg.gtodo {
+        let mut st = Todo::at(t);
+        st.consume([bl.x, bl.y, bl.w, bl.h], t, &guide, cfg.gahead);
+        play_out_todo(&mut b, &guide, st, cfg.gahead, &cfg.hp, Some(&mut out), None);
+    } else {
+        play_out_guided(&mut b, &guide, cfg.gscan, &cfg.hp, Some(&mut out), None);
+    }
     Some(out)
 }
 
