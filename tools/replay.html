@@ -15,12 +15,12 @@
 <style>
   :root {
     --bg: #f5f3ee; --ink: #1c1b19; --muted: #6d6a63; --panel: #ffffff; --border: #d9d5cc;
-    /* The board uses the real game's colours in both page themes: white field and free blocks,
-       black lines, solid black point blocks with white numbers. */
-    --void: #ffffff; --free: #ffffff; --line: #000000;
-    --pt: #000000; --pt-ink: #ffffff; --pt-edge: #ffffff;
-    --soon: #f5b301;
-    --casing: #000000;
+    /* The board uses the real game's colours in both page themes: blocks you can cut are black,
+       point blocks (numbered) dark grey, empty space white; thin light lines between blocks. */
+    --void: #ffffff; --free: #000000; --line: #d4d4d4;
+    --pt: #4a4a4a; --pt-ink: #ffffff; --pt-edge: #d4d4d4;
+    --soon: #ffc21a;
+    --casing: #ffffff; --board-edge: #8a867d;
     --accent: #1565ff; --accent-ink: #ffffff; --accent-press: #0d4fd0;
     --label: #8a867d; --label-hot: #1565ff;
     color-scheme: light;
@@ -149,12 +149,11 @@
   /* Board (SVG; one user unit = one cell) */
   .void { fill: var(--void); }
   .free { fill: var(--free); stroke: var(--line); stroke-width: .05; }
-  /* A thin white edge keeps neighbouring black point blocks apart. */
   .pt { fill: var(--pt); stroke: var(--pt-edge); stroke-width: .045; }
   .num { fill: var(--pt-ink); font-weight: 650; font-variant-numeric: tabular-nums; }
   .soon + .num { fill: var(--soon); }   /* the blocks that explode first: amber numbers */
-  .frame { fill: none; stroke: var(--line); stroke-width: .08; }
-  /* Upcoming splits: a dark casing under each coloured line keeps it visible on any block. */
+  .frame { fill: none; stroke: var(--board-edge); stroke-width: .08; }
+  /* Upcoming splits: a white casing under each coloured line keeps it visible on the black blocks. */
   .tapfill { animation: pulse 1.1s ease-in-out infinite alternate; }
   .casing { fill: none; stroke: var(--casing); stroke-width: .15; }
   .outline { fill: none; stroke-width: .07; }
@@ -164,8 +163,8 @@
   .badgen { font-weight: 750; }
   .lbl { fill: var(--label); font-size: .36px; }
   .lbl.hot { fill: var(--label-hot); font-weight: 700; }
-  @keyframes pulse { from { fill-opacity: .55; } to { fill-opacity: .22; } }
-  @media (prefers-reduced-motion: reduce) { .tapfill { animation: none; fill-opacity: .4; } }
+  @keyframes pulse { from { fill-opacity: .85; } to { fill-opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) { .tapfill { animation: none; fill-opacity: .65; } }
 </style>
 </head>
 <body>
