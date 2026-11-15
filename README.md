@@ -145,8 +145,8 @@ Of the approaches considered, existing open-source code turned out to be the rig
   `verify.mjs`), a canvas player, and the script that builds them into the blog. See
   `tools/blog/README.md`.
 - `tools/replay.html` - single-file page for replaying a sequence by hand on the real game:
-  shows each board with the block to tap highlighted. It loads the per-move JSON written by
-  `src/bin/export_game.rs`.
+  shows each board with the next splits numbered in order (up to 8 at a time). It loads the
+  per-move JSON written by `src/bin/export_game.rs`.
 
 ## Running
 
@@ -188,15 +188,19 @@ Most of the time goes into evaluating positions; see "Performance" in
 ## Replaying a sequence by hand
 
 ```
-cargo run --release --bin export_game -- runs/best/scratch_2064_rbeam_w100_k4_r200_st2_s1.txt runs/best/scratch_2064.json
+cargo run --release --bin export_game -- runs/best/game_3898.txt runs/best/game_3898.json
 ```
 
-Open `tools/replay.html` in a browser and load the JSON with "Open file" or by dropping it on
-the page. Tap the highlighted block in the game, then press "I made this move" (or Space / Right
-arrow; Left arrow goes back). The "Score" box jumps to the position where the game shows that
-score, and the page remembers each file's position in the browser. Served over http, it also
-takes `?src=`: run `python -m http.server` in the project folder and open
-`http://localhost:8000/tools/replay.html?src=../runs/best/scratch_2064.json`.
+(`tools/queue/finalize.sh` writes this JSON for each new best game.) Open `tools/replay.html` in
+a browser and load the JSON with "Open file" or by dropping it on the page. The page numbers
+the next splits 1 to 8 in rainbow order, each with its cut drawn as a dashed line. Make them in
+the game in that order, then press the big button (or Space / Enter). A batch ends early at the
+split after which blocks explode or fall, because the board changes then. On the 3898 game
+that is 1179 presses, about 3.3 moves each. "Show" sets the batch size (1 to 8); Right / Left
+arrow step one move. The "Score" box jumps to the position where the game shows that score,
+and the page remembers each file's position in the browser. Served over http, it also takes
+`?src=`: run `python -m http.server` in the project folder and open
+`http://localhost:8000/tools/replay.html?src=../runs/best/game_3898.json`.
 
 ## What I learned about the search
 
