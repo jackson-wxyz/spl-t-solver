@@ -144,6 +144,9 @@ Of the approaches considered, existing open-source code turned out to be the rig
   (checked against this engine position by position with `src/bin/frames.rs` and
   `verify.mjs`), a canvas player, and the script that builds them into the blog. See
   `tools/blog/README.md`.
+- `tools/steam/` - plays a game from `runs/best/` on the Steam version (Simogo Legacy
+  Collection) by sending mouse input, checks every position on screen against the engine,
+  and records the screen with ffmpeg. See `tools/steam/README.md`.
 - `tools/replay.html` - single-file page for replaying a sequence by hand on the real game:
   shows each board with the next splits numbered in order (up to 8 at a time). It loads the
   per-move JSON written by `src/bin/export_game.rs`.
