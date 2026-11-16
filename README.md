@@ -26,9 +26,12 @@ The engine replays all four published record games move for move, and every sequ
 `runs/best/` is re-verified by `replay`, which checks the engine's invariants after every
 move. The best game has also been replayed in the engine's slow reference build and in
 Josh Holder's original Python emulator (`tools/analysis/pyreplay.py`), which accepts every
-move and ends on the last one. What has **not** been done is playing a solver sequence on
-the real game: a record claim needs that. `tools/replay.html` is the page for doing it by
-hand (see "Replaying a sequence by hand").
+move and ends on the last one. On 2026-11-16 it was also **played on the real game**: the
+Steam version (Simogo Legacy Collection), driven by `tools/steam/play.py`, which checked
+every one of the 3,898 positions on screen against the engine. The game ended on move
+3,898 with a score of 9,726,776, and the collection now shows that as its best score. That
+was a script, not a person; `tools/replay.html` is the page for playing it by hand (see
+"Replaying a sequence by hand").
 
 The 3898 game keeps all four 2-column pipes working, eight clusters deep from move 2512,
 and ends with the pipes in two pairs that explode in unison. The earlier games ran three

@@ -133,16 +133,17 @@ class Cursor:
     """The Legacy Collection's own pointer (the "right cursor").
 
     The game locks the Windows cursor and moves its own hand sprite by the raw motion of
-    the mouse. Measured on 2026-11-15 at 3840 x 2160: the hand moves exactly GAIN screen
-    pixels per unit of motion, whatever the step size, and stops at the screen's top-left
-    corner. So pushing it far up and left puts it at (0, 0), and from there a target's
-    pixel position is reached by moving by position / GAIN. Moving the real mouse while
-    this runs breaks the tracking (call `zero` again)."""
+    the mouse. Measured on 2026-11-15 at 3840 x 2160 fullscreen: the hand moves exactly
+    0.5 screen pixels per unit of motion, whatever the step size, and stops at the screen's
+    top-left corner. So pushing it far up and left is a known zero, and from there a
+    target's position is reached exactly. `gain` (pixels per unit) and the hotspot's
+    position at the zero (ox, oy) depend on the window; `calib.calibrate_cursor` measures
+    them. Moving the real mouse while this runs breaks the tracking (call `zero` again)."""
 
-    GAIN = 0.5
     STEP = 60  # units per input event; the game does not care, but keep events small
 
-    def __init__(self):
+    def __init__(self, gain=0.5, ox=0.0, oy=0.0):
+        self.gain, self.ox, self.oy = gain, ox, oy
         self.ux = self.uy = None  # position in motion units since the last zero
 
     def _go(self, dx, dy):
@@ -155,17 +156,26 @@ class Cursor:
             time.sleep(0.002)
 
     def zero(self):
-        self._go(-9000, -9000)
+        self._go(-14000, -14000)
         self.ux = self.uy = 0
         time.sleep(0.05)
 
-    def goto(self, x, y):
-        """Move the hand to screen pixel (x, y)."""
+    def units_for(self, x, y):
+        return round((x - self.ox) / self.gain), round((y - self.oy) / self.gain)
+
+    def goto_units(self, tx, ty):
         if self.ux is None:
             self.zero()
-        tx, ty = round(x / self.GAIN), round(y / self.GAIN)
         self._go(tx - self.ux, ty - self.uy)
         self.ux, self.uy = tx, ty
+
+    def goto(self, x, y):
+        """Move the hand's hotspot to screen pixel (x, y)."""
+        self.goto_units(*self.units_for(x, y))
+
+    def pos(self):
+        """Where the hotspot is now, in screen pixels."""
+        return self.ox + self.gain * self.ux, self.oy + self.gain * self.uy
 
     def click(self, x=None, y=None, hold=0.03):
         if x is not None:
@@ -173,6 +183,33 @@ class Cursor:
         _send(_mouse(0x0002))  # LEFTDOWN
         time.sleep(hold)
         _send(_mouse(0x0004))  # LEFTUP
+
+    def to_dict(self):
+        return {'gain': self.gain, 'ox': self.ox, 'oy': self.oy}
+
+
+def find_hand(img, rect):
+    """The hand sprite's fingertip (top centre of its white glove) inside `rect` (screen
+    pixels) of a screenshot `img`, or None. Looks for a dense patch of near-white pixels,
+    which nothing else on a dark SPL-T board has (lines are one pixel, empty cells are
+    white rectangles, so call this only where none are)."""
+    import numpy as np
+    l, t, r, b = rect
+    a = np.asarray(img.crop(rect).convert('RGB'), dtype=np.int16)
+    white = a.min(axis=2) > 225
+    T = 8
+    hh, ww = white.shape[0] // T * T, white.shape[1] // T * T
+    tiles = white[:hh, :ww].reshape(hh // T, T, ww // T, T).mean(axis=(1, 3))
+    ys, xs = np.nonzero(tiles > 0.6)
+    if len(xs) < 3:
+        return None
+    y0, y1 = max(0, (ys.min() - 2) * T), min(white.shape[0], (ys.max() + 3) * T)
+    x0, x1 = max(0, (xs.min() - 2) * T), min(white.shape[1], (xs.max() + 3) * T)
+    box = white[y0:y1, x0:x1]
+    wy, wx = np.nonzero(box)
+    top = wy.min()
+    tip = wx[wy <= top + 3].mean()
+    return (l + x0 + tip, t + y0 + top)
 
 
 def shot(path, rect=None, scale=0.5):

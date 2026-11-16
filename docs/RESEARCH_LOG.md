@@ -203,6 +203,13 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   `keeper runs/best/game_3588.txt --from 2600 --width 1000 --seed 2 --wsync 60`. Checked by
   `replay`, by the engine's slow reference build, and by Josh Holder's Python emulator
   (`tools/analysis/pyreplay.py`): 3898 of 3898 moves accepted, game over on the last one.
+- **Played on the real game (2026-11-16).** `tools/steam/play.py` played the whole 3898
+  game on the Steam version (Simogo Legacy Collection) in a 1920 x 1080 window, comparing
+  the screen with the engine after every move: all 3,898 positions matched, the game ended
+  on the last move, final score 9,726,776, saved as the collection's best score. 29.3
+  minutes; recording in `runs/steam/` (git-ignored), see `tools/steam/README.md`. So the
+  emulator and the Steam version agree on every refill situation the game uses, including
+  the rare ones before move 900.
 - **Nothing is running.** The session-6 local-search workers were stopped at 15:18 (they
   had reached 3128 and 3140 on the old line). Results of the keeper grids are in
   `runs/keeper/grid*.log` (one line per run); the games of 3,600 splits and more are in
@@ -214,7 +221,7 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   https://claude.ai/artifact/TFs2adq7eKa8naU47FX2Ag), update the numbers in the blog draft
   (its header comment lists every place), re-run `tools/analysis/record_history_chart.py`
   with the new `SOLVER`, and update the README table and the Asana card.
-- **Before a real-game replay**: run `refills` on the game. For the 3898 game the four
+- **Before replaying a new game**: run `refills` on it. For the 3898 game the four
   refill situations its late game is made of (four cluster blocks to a 2x2, eight to a 4x2,
   the two blocks of half a wide cluster to a 2x2, the four blocks of a wide cluster to a
   4x2) all occur in the published 1053, 1133 and 1196 games, which were played on the real

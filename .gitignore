@@ -17,3 +17,4 @@
 /runs/keeper/
 /runs/steam/
 __pycache__/
+/tools/steam/calib.json
