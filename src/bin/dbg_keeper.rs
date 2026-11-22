@@ -28,7 +28,7 @@ fn main() {
             let s = score(&b);
             let v: Vec<String> = (0..4).map(|p| { let v = view(&b, p); format!("{}{}{}w{}d{}", v.events, if v.fresh { "f" } else { "" }, if v.due { "D" } else { "" }, v.work, v.deadline) }).collect();
             println!(
-                "{n:>5} legal {:>2} clean {:>2} | made {} unclean {} | phi {} {:?} over {} cap {} doomed {} | {}",
+                "{n:>5} legal {:>2} clean {:>2} | made {} unclean {} | phi {} {:?} over {} cap {} doomed {} matched {} quad {} | {}",
                 legal.len(),
                 nclean,
                 info.new_point_blocks,
@@ -38,6 +38,8 @@ fn main() {
                 s.over,
                 s.cap,
                 s.doomed,
+                s.matched,
+                s.quad,
                 v.join(" ")
             );
         }

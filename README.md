@@ -92,6 +92,11 @@ Of the approaches considered, existing open-source code turned out to be the rig
   capacity is burnt in wide clusters; the beam finds those by itself. `--plan 1` is a
   depth-first planner on the same model, for measurements on tidy positions.
   `src/bin/dbg_keeper.rs` prints the keeper's view of every position of a game.
+  `keeper --trace FILE` records the beam's family tree, and
+  `tools/analysis/beam_lineages.py` draws it as a chart of competing lineages
+  (`docs/figures/beam_lineages_run2.png`). `src/bin/barcheck.rs` shows by exhaustive
+  search why four pipes in unison do not work: the 8x2 block they would get back cannot be
+  split by itself (research log, "Session 8").
 - `src/bin/ils.rs` - the session 5-6 solver: iterated local search on finished games.
   Each step kicks a game (plays a different move somewhere in its last few hundred moves and
   completes it by following the original), then polishes the result with a guided beam

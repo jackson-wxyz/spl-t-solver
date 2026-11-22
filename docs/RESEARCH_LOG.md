@@ -210,6 +210,10 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   minutes; recording in `runs/steam/` (git-ignored), see `tools/steam/README.md`. So the
   emulator and the Steam version agree on every refill situation the game uses, including
   the rare ones before move 900.
+- **Session 8 (2026-11-22) added tools and findings, no game**: the beam's family tree
+  (`keeper --trace`, `tools/analysis/beam_lineages.py`, figures in `docs/figures/`), and
+  the answer to "could all four pipes explode together": no, a full-width bar cannot be
+  split by itself (`barcheck`; boards built in unison end 23 moves later).
 - **Nothing is running.** The session-6 local-search workers were stopped at 15:18 (they
   had reached 3128 and 3140 on the old line). Results of the keeper grids are in
   `runs/keeper/grid*.log` (one line per run); the games of 3,600 splits and more are in
@@ -241,9 +245,124 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   older draft `spl-t-solver.md`, which tells the story up to 3,103 and is kept as source
   material. Its animations replay the game in the browser; they are built from
   `tools/blog/` (`node tools/blog/build.mjs "<blog folder>"`, see `tools/blog/README.md`).
-  Nothing in the blog repo is committed: the post, the shortcode
-  `layouts/shortcodes/splt.html`, `static/splt/` and the record chart are untracked there,
-  for Jackson to review. Video plan: Asana card "SPL-T world-record video".
+  The post, the shortcode `layouts/shortcodes/splt.html`, `static/splt/` and the record
+  chart were pushed to the blog repo on 2026-11-10 (still `draft: true`), for Jackson to
+  review. Video plan: Asana card "SPL-T world-record video".
+
+## Session 8 (2026-11-22, desktop, Claude Fable 5.2): the beam's lineages, and why no full-width bar
+
+While recording the video commentary Jackson asked three things: for a picture of the
+search's competing lineages (like a chart of virus variants), whether all four pipes could
+explode together so that the refill is one 8x2 bar (15 splits per interval instead of the
+14 of two pairs), and whether the search could skip ahead through the late game's cycle.
+No new game came of it; 3898 stands.
+
+### What changed
+
+- `keeper --trace FILE` writes the beam's family tree: for every step, which member of the
+  previous beam each member came from, with its levels, burnt capacity and unison counts
+  (format in `KOut::trace`). Tracing does not change the search: both record runs
+  reproduce their games move for move with it.
+- `tools/analysis/beam_lineages.py` draws a trace (figures in `docs/figures/`): the share
+  of the beam held by each lineage, the number of distinct ancestors 10 to 200 moves back,
+  and how far back the beam's common ancestor lies.
+- `keeper --wquad X`: a reward per explosion that all four pipes will share
+  (`Score::quad`). `dbg_keeper` prints it.
+- `src/bin/barcheck.rs`: exhaustive search, with the real engine, of what can be done with
+  the blocks one refill delivers when nothing else on the board can be split.
+
+### Findings
+
+- **The second search kept rival families alive for hundreds of moves.** In the run that
+  found moves 2601 to 3898 (1,000 positions per step) the common ancestor of the whole beam
+  lies 292 moves back at the median and 532 at most (at move 3273 everything in the beam
+  still descended from two branches that had parted at move 2741). Four distinct ancestors
+  100 moves back is typical, up to 20. Five times an old family died out and the common
+  ancestor jumped forward (moves 2726, 3090, 3274, 3518 and 3880). The families differ in
+  how much capacity they have burnt: the beam gives positions with the same burnt total at
+  most 40% of its places (`--share`), a wide cluster burns 4, and at most of the moves
+  checked the families were the classes of that total modulo 4, living side by side until
+  one of them loses a level. The first search (300 positions, moves 701 to 2600) turns over much faster: common
+  ancestor 49 moves back at the median, 158 at most.
+- **A bar cannot be worked by itself** (`barcheck`). With nothing else to split:
+
+  | blocks delivered | first split horizontal | first split vertical |
+  |---|---|---|
+  | one 2x2 square | 2 moves, never finished | 2 moves, never finished |
+  | one 4x2 plank | 2 moves | all 7 |
+  | two 4x2 planks at once | 8 moves | all 14 |
+  | plank with a square on each side | all 13 | all 13 |
+  | one 8x2 bar | 2 moves | 9 moves at most (finished after 7 or 9) |
+  | bar and two 1x2 blocks left from before | all 17 | all 17 |
+
+  The splits alternate, a block one row tall cannot be cut horizontally, and a horizontal
+  cut of the fresh bar leaves two such strips. A bar needs 8 vertical and 7 horizontal
+  splits (or 7 and 8) in an order that only another block's spare splits can provide.
+- **The two pairs are locked 6 moves apart, and that is why they work.** From move 3300 of
+  the 3898 game pipes 2+3 explode exactly 6 moves after pipes 0+1 in 37 of 39 cycles (7
+  in the other two, near the end), while the cycle grows from 12.8 to 14.5 moves. Each plank
+  arrives on a vertical split, and the other pair's unfinished plank supplies the odd move.
+  In the whole game all four pipes exploded on one move once (move 422, shallow pipes), and
+  no bar ever stood on the board after the opening.
+- **Four pipes in exact unison, by construction, die at once.** Take a position of the 3898
+  game just after one pair exploded and copy that half of the board onto the other half:
+  a tidy board, real stacks, all four pipes in unison. From moves 3503, 3509, 3603, 3611,
+  3701 and 3709 the keeper (three seeds, with and without unclean clusters) ends exactly 23
+  moves later: 14 on the two planks, 9 on the bar. From the unchanged positions it reaches
+  3898. Where a horizontal split is due it ends after 8 moves. At move 2901, where the
+  cycle is 11 moves and the board has splits to spare, the unison board lasts 108 to 129
+  moves and works seven bars with the leftovers before it dies; the real position goes on
+  for 909.
+- **Rewarding four-way unison does nothing, because the search never gets near it.**
+  `--wquad` 60, 300 and 2000 from moves 1200 to 3300 of the 3898 game, 2600 of the 3588
+  game and 700 and 800 of the 3103 game (162 runs with the reward, 54 without). From
+  every start but move 700 each run is identical to its twin without the reward: no
+  position in any of those beams had even one explosion that all four pipes would share.
+  From move 700 (shallow pipes) a four-pipe explosion happens by chance in a quarter of
+  the runs with or without the reward, 9 of 36 runs differ, and the best is one without
+  (2161 against 2097).
+- **Bringing the pairs together by timing would take longer than the game.** (Arithmetic,
+  not an experiment.) A cluster explodes eight explosions after it is made, and making it
+  one move later delays that by 1/64 of a move. If a pipe makes every cluster d moves
+  later than it could, its explosions drift by about d/128 moves per interval. Closing a
+  gap of 6 moves with d = 6 takes about 130 intervals, some 1,800 moves at 14 per interval.
+  Pipes do change phase quickly when a level is gained or lost (that is how the pairs
+  formed), but the place they would have to reach is the unison board above.
+- **So the answer to "how much would a bar add" is 265 splits that cannot be had.** At 15
+  splits per interval the balance point would be 15 x 265 = 3,975 instead of 3,710, and a
+  game that ran as far past it as the 3898 game runs past its own would end near 4,160.
+  A bar can be used in full only when a pipe carries an unfinished cluster into the
+  interval (last row of the table). That cluster is then completed one level too low with
+  twice the value its place calls for, so the pipe later misses one explosion and has two
+  close together. The keeper, allowed unclean clusters, found no schedule of that kind
+  that holds; no planner was written for it.
+- **The late game is a recipe, not a loop.** From move 3300 there are 43 cycles of 12 to 15
+  moves (13: 17 times, 14: 19, 15: 5) and 33 different sets of moves among them; the
+  game never repeats a whole cycle of its own moves (at a period of 14 the longest exact
+  repeat is 7 moves). Each cycle
+  is the same recipe (two planks, seven splits each, one of them borrowed across), in an
+  order that depends on which split is due, and the cycle gets a move longer every 265
+  moves. A fixed list of moves cannot be replayed, but the recipe could be written as a
+  play-out rule. It would not find longer games: the beam already reaches the end in three
+  seconds, every setting from moves 3300, 3500 and 3700 ends on 3898, and what is decided
+  earlier (which levels exist, and when the pairs lock) is not periodic. The passive
+  fast-forward (`doom`, `passive_bound`) sees about 100 moves ahead, which is the eight
+  explosions per pipe already fixed by the values on the board.
+
+### Reproduce
+
+```
+keeper runs/best/game_3103.txt --from 700 --width 300 --seed 2 --wcap 30 --trace runs/keeper/trace/run1.ktr
+keeper runs/best/game_3588.txt --from 2600 --width 1000 --seed 2 --wsync 60 --trace runs/keeper/trace/run2.ktr
+python tools/analysis/beam_lineages.py docs/figures/beam_lineages_both.png runs/keeper/trace/run1.ktr:2600@30 runs/keeper/trace/run2.ktr
+python tools/analysis/beam_lineages.py docs/figures/beam_lineages_run2.png runs/keeper/trace/run2.ktr
+barcheck
+```
+
+The unison boards and the `--wquad` runs were made with throwaway scripts (a board is one
+line with the split count and one "x y w h pts" line per block, played with
+`keeper - --startboard FILE`); the games are in `runs/keeper/mirror/` and
+`runs/keeper/quad/` (git-ignored).
 
 ## Session 7 (2026-11-10 afternoon, desktop, Claude Fable 5.2): the pipe keeper, 3140 to 3898
 
@@ -384,7 +503,7 @@ was built three times. The version that works is the simplest one.
   whatever the cluster values make it, so it would have to be exactly one of those numbers
   every time. Two pairs half a period apart can lend each other moves; that is the largest
   structure that works, and its balance point of 3,710 is why the games stop near 3,900.
-  (Whether a structure that is a quad only some of the time could do better is untested.)
+  (Session 8 tested this: see "A bar cannot be worked by itself" there.)
 - **The end is fixed 600 moves ahead.** From moves 3300, 3500 and 3700 of the 3898 game,
   every setting tried (unison bonus, capacity, capacity bound up to 1,000 per move, unclean
   clusters allowed, widths 1000 and 3000) ends on 3898 or earlier, never later. At the end

@@ -2,7 +2,8 @@
 //! of levels the four pipes hold (see `src/keeper.rs`).
 //!
 //! usage: keeper GAME --from M [--width W] [--share F] [--seed S] [--until N] [--loose 1]
-//!               [--wover X] [--wjunk X] [--wcap X] [--log N] [--out FILE] [--startboard FILE]
+//!               [--wover X] [--wjunk X] [--wcap X] [--wsync X] [--wquad X] [--log N]
+//!               [--out FILE] [--trace FILE] [--startboard FILE]
 //!
 //! Writes the whole game (GAME's first M moves, then the keeper's) to FILE and prints its
 //! length. With --startboard the game starts from that position and GAME may be omitted
@@ -23,6 +24,7 @@ fn main() {
         w_excess: arg(&args, "--wexcess").unwrap_or(d.w_excess),
         margin: arg(&args, "--margin").unwrap_or(d.margin),
         w_sync: arg(&args, "--wsync").unwrap_or(d.w_sync),
+        w_quad: arg(&args, "--wquad").unwrap_or(d.w_quad),
         w_near: arg(&args, "--wnear").unwrap_or(d.w_near),
         w_bound: arg(&args, "--wbound").unwrap_or(d.w_bound),
         w_over: arg(&args, "--wover").unwrap_or(d.w_over),
@@ -32,6 +34,7 @@ fn main() {
         seed: arg(&args, "--seed").unwrap_or(0),
         log: arg(&args, "--log").unwrap_or(d.log),
         until: arg(&args, "--until").unwrap_or(0),
+        trace: arg::<String>(&args, "--trace").is_some(),
     };
     let mut b = Board::start();
     let mut prefix: Vec<u8> = Vec::new();
@@ -129,5 +132,8 @@ fn main() {
     );
     if let Some(out) = arg::<String>(&args, "--out") {
         write_sequence(&out, &game);
+    }
+    if let Some(path) = arg::<String>(&args, "--trace") {
+        std::fs::write(&path, &o.trace).expect("write --trace");
     }
 }

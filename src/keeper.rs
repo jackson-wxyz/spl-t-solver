@@ -210,6 +210,9 @@ pub struct Score {
     /// Explosions that two neighbouring pipes will have on the same move (their holes then
     /// refill as one block four wide, worth 7 splits instead of 6).
     pub matched: u32,
+    /// Explosions that all four pipes will have on the same move (the four holes then
+    /// refill as one block eight wide).
+    pub quad: u32,
     /// The same count with partial credit: an explosion of a pipe that comes d < 8 moves
     /// from the nearest explosion of its right-hand neighbour counts (8 - d) / 8. Two pipes
     /// a few moves apart can be brought together over several intervals by making the later
@@ -218,7 +221,7 @@ pub struct Score {
 }
 
 pub fn score(b: &Board) -> Score {
-    let mut s = Score { phi: 0, per_pipe: [0; 4], over: 0, junk: 0, cap: 0, doomed: false, rate: 0, matched: 0, near: 0.0 };
+    let mut s = Score { phi: 0, per_pipe: [0; 4], over: 0, junk: 0, cap: 0, doomed: false, rate: 0, matched: 0, quad: 0, near: 0.0 };
     let mut due: [(u16, u8); 4] = [(0, 0); 4];
     let mut nd = 0;
     let mut ev = [[0u16; H]; 4];
@@ -256,6 +259,7 @@ pub fn score(b: &Board) -> Score {
             }
         }
     }
+    s.quad = ev[0][..ne[0]].iter().filter(|&&a| (1..4).all(|p| ev[p][..ne[p]].contains(&a))).count() as u32;
     due[..nd].sort();
     let mut cum = 0u32;
     for &(d, w) in &due[..nd] {
@@ -302,6 +306,9 @@ pub struct KCfg {
     pub margin: f32,
     /// Weight per explosion that two neighbouring pipes will share (`Score::matched`).
     pub w_sync: f32,
+    /// Weight per explosion that all four pipes will share (`Score::quad`), on top of
+    /// `w_sync` (which already counts such an explosion three times).
+    pub w_quad: f32,
     /// Weight of `Score::near`.
     pub w_near: f32,
     /// Weight of the capacity bound on the moves left (`search::passive_bound`): how long
@@ -316,11 +323,13 @@ pub struct KCfg {
     pub log: usize,
     /// Stop at this split count and return the best-scoring line (0 = play to the end).
     pub until: usize,
+    /// Record the beam's family tree in `KOut::trace` (see `tools/analysis/beam_lineages.py`).
+    pub trace: bool,
 }
 
 impl Default for KCfg {
     fn default() -> Self {
-        KCfg { width: 500, share: 0.4, w_phi: 1000.0, w_over: 40.0, w_junk: 5.0, w_cap: 0.0, w_rate: 0.0, w_excess: 0.0, margin: 0.3, w_sync: 0.0, w_near: 0.0, w_bound: 0.0, loose: false, seed: 0, log: 50, until: 0 }
+        KCfg { width: 500, share: 0.4, w_phi: 1000.0, w_over: 40.0, w_junk: 5.0, w_cap: 0.0, w_rate: 0.0, w_excess: 0.0, margin: 0.3, w_sync: 0.0, w_quad: 0.0, w_near: 0.0, w_bound: 0.0, loose: false, seed: 0, log: 50, until: 0, trace: false }
     }
 }
 
@@ -345,6 +354,13 @@ pub struct KOut {
     pub splits: u16,
     /// Split count at which the total level count last equalled its starting value.
     pub held_until: u16,
+    /// With `KCfg::trace`: the beam's family tree, little-endian. Per step: split count
+    /// (u16), beam size n (u16), then n records of 10 bytes: index of the parent in the
+    /// previous step's beam (u16), capacity burnt (u16), levels per pipe (four nibbles,
+    /// u16), total levels, shared explosions of neighbours, shared explosions of all four,
+    /// doomed flag (u8 each). Then 0xFFFF, a count, and (split count, beam index) for each
+    /// position of the returned game.
+    pub trace: Vec<u8>,
 }
 
 /// Run the keeper beam from `start`. Returns the longest game found (or, with `until`, the
@@ -355,6 +371,22 @@ pub fn run(start: &Board, cfg: &KCfg) -> KOut {
     let mut beam = vec![Node { b: start.clone(), at: 0, burnt: 0, sc: 0.0, doomed: s0.doomed }];
     let mut best_end: (u16, u32) = (start.moves, 0);
     let mut held_until = start.moves;
+    // Trace: arena range of each step's beam, and the records.
+    let mut ranges: Vec<(u32, u32, u16)> = vec![(0, 1, start.moves)];
+    let mut trace: Vec<u8> = Vec::new();
+    let rec = |trace: &mut Vec<u8>, parent: u16, burnt: u32, b: &Board, doomed: bool| {
+        let s = score(b);
+        let lv = s.per_pipe.iter().enumerate().fold(0u16, |a, (p, &l)| a | ((l as u16) << (4 * p)));
+        trace.extend_from_slice(&parent.to_le_bytes());
+        trace.extend_from_slice(&(burnt.min(65535) as u16).to_le_bytes());
+        trace.extend_from_slice(&lv.to_le_bytes());
+        trace.extend_from_slice(&[s.phi.min(255) as u8, s.matched.min(255) as u8, s.quad.min(255) as u8, doomed as u8]);
+    };
+    if cfg.trace {
+        trace.extend_from_slice(&start.moves.to_le_bytes());
+        trace.extend_from_slice(&1u16.to_le_bytes());
+        rec(&mut trace, u16::MAX, 0, start, s0.doomed);
+    }
     if cfg.log > 0 {
         eprintln!("keeper start at {}: levels {:?} = {}, cap {}", start.moves, s0.per_pipe, s0.phi, s0.cap);
     }
@@ -377,6 +409,7 @@ pub fn run(start: &Board, cfg: &KCfg) -> KOut {
                     let allowed = t.moves as f32 / 3.118 * (1.0 + cfg.margin);
                     let rate = s.rate as f32;
                     let sc = cfg.w_phi * s.phi as f32 + cfg.w_rate * rate.min(allowed) - cfg.w_excess * (rate - allowed).max(0.0) + cfg.w_sync * s.matched as f32
+                        + cfg.w_quad * s.quad as f32
                         + cfg.w_near * s.near
                         + if cfg.w_bound > 0.0 { cfg.w_bound * crate::search::passive_bound(&t, 600).0 as f32 } else { 0.0 }
                         - cfg.w_over * s.over as f32
@@ -447,8 +480,17 @@ pub fn run(start: &Board, cfg: &KCfg) -> KOut {
         }
         let mut next = Vec::with_capacity(chosen.len());
         let mut kids = kids;
+        let prev_base = ranges.last().unwrap().0;
+        ranges.push((arena.len() as u32, chosen.len() as u32, step as u16 + 1));
+        if cfg.trace {
+            trace.extend_from_slice(&(step as u16 + 1).to_le_bytes());
+            trace.extend_from_slice(&(chosen.len() as u16).to_le_bytes());
+        }
         for i in chosen {
             let k = std::mem::replace(&mut kids[i], (Board::new(), 0, 0, 0, 0.0, true, true));
+            if cfg.trace {
+                rec(&mut trace, (k.1 - prev_base) as u16, k.3, &k.0, k.5);
+            }
             arena.push((k.1, k.2));
             next.push(Node { b: k.0, at: arena.len() as u32 - 1, burnt: k.3, sc: k.4, doomed: k.5 });
         }
@@ -481,13 +523,30 @@ pub fn run(start: &Board, cfg: &KCfg) -> KOut {
     let _ = beam.first().map(|x| x.sc);
     let mut moves = Vec::new();
     let mut at = best_end.1;
-    while at != 0 && at != u32::MAX {
+    let mut line: Vec<(u16, u16)> = Vec::new();
+    while at != u32::MAX {
+        // The beam this arena entry belongs to, if any (finished games lie between beams).
+        let r = ranges.partition_point(|x| x.0 <= at) - 1;
+        if at < ranges[r].0 + ranges[r].1 {
+            line.push((ranges[r].2, (at - ranges[r].0) as u16));
+        }
+        if at == 0 {
+            break;
+        }
         let (p, m) = arena[at as usize];
         moves.push(m);
         at = p;
     }
     moves.reverse();
-    KOut { moves, splits: best_end.0, held_until }
+    if cfg.trace {
+        trace.extend_from_slice(&u16::MAX.to_le_bytes());
+        trace.extend_from_slice(&(line.len() as u16).to_le_bytes());
+        for &(mv, i) in line.iter().rev() {
+            trace.extend_from_slice(&mv.to_le_bytes());
+            trace.extend_from_slice(&i.to_le_bytes());
+        }
+    }
+    KOut { moves, splits: best_end.0, held_until, trace }
 }
 
 // ---------------------------------------------------------------------------------------
