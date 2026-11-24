@@ -30,7 +30,7 @@ recs = [
     (2026.19, 1396, 'ryederek', UNK),
     (2026.22, 1910, 'ryederek', UNK),
 ]
-SOLVER = (2026.86, 3898)
+SOLVER = (2026.87, 3898)   # played on the Steam version by a script on 2026-11-16
 
 plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 11})
 # The height keeps about 2,500 splits per 5.4 inches, so the label offsets below (in splits)
@@ -54,12 +54,12 @@ for x, y, *_ in recs:
     xs.append(x)
     ys.append(y)
 ax.plot(xs, ys, color=MUTED, lw=2, zorder=2, solid_joinstyle='miter')
-# The solver's game: dashed, because it has not been played on the real game.
-ax.plot([recs[-1][0], SOLVER[0], SOLVER[0]], [1910, 1910, SOLVER[1]], color=COMP, lw=2, ls=(0, (4, 3)), zorder=2)
+# The solver's game (dashed until 2026-11-16, when a script played it on the Steam version).
+ax.plot([recs[-1][0], SOLVER[0], SOLVER[0]], [1910, 1910, SOLVER[1]], color=COMP, lw=2, zorder=2, solid_joinstyle='miter')
 
 for x, y, who, c in recs:
     ax.scatter([x], [y], s=70, color=c, edgecolors=SURF, linewidths=2, zorder=4)
-ax.scatter([SOLVER[0]], [SOLVER[1]], s=80, facecolors=SURF, edgecolors=COMP, linewidths=2.2, zorder=4)
+ax.scatter([SOLVER[0]], [SOLVER[1]], s=80, color=COMP, edgecolors=SURF, linewidths=2, zorder=4)
 
 def lab(x, y, text, ha='left', dx=0.18, dy=0, **kw):
     ax.text(x + (dx if ha == 'left' else -dx), y + dy, text, ha=ha, va='center', color=INK, fontsize=10.5, **kw)
@@ -77,7 +77,7 @@ ax.annotate('', xy=(2022.35, 1240), xytext=(2021.85, 1480),
             arrowprops=dict(arrowstyle='-', color=MUTED, lw=1))
 lab(2026.19, 1396, '1,396', ha='right', dx=0.15)
 lab(2026.22, 1910, '1,910  ryederek (Mar 2026)', ha='right', dx=0.2)
-lab(SOLVER[0], SOLVER[1], f'{SOLVER[1]:,}  this solver (Nov 2026)\ncomputed; not yet played', ha='right', dx=0.22)
+lab(SOLVER[0], SOLVER[1], f'{SOLVER[1]:,}  this solver (Nov 2026)\nplayed on Steam by a script', ha='right', dx=0.22)
 
 ax.set_xlim(2015.2, 2027.3)
 ax.set_ylim(800, 4150)
@@ -97,7 +97,6 @@ ax.set_title('The SPL-T world record, 2015-2026', loc='left', color=INK, fontsiz
 from matplotlib.lines import Line2D
 h = [Line2D([], [], marker='o', ls='', ms=8, color=c, markeredgecolor=SURF, markeredgewidth=1.5, label=l)
      for c, l in [(COMP, 'computer search'), (HAND, 'by hand'), (UNK, 'method not stated')]]
-h.append(Line2D([], [], marker='o', ls='', ms=8, markerfacecolor=SURF, markeredgecolor=COMP, markeredgewidth=2, label='computed, not yet played on the game'))
 leg = ax.legend(handles=h, loc='upper left', bbox_to_anchor=(0.07, 0.9), frameon=False, fontsize=10, labelcolor=INK2, handletextpad=0.4)
 
 fig.tight_layout()

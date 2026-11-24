@@ -240,14 +240,16 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   its depth (764 splits in the 3898 game) cannot be stored on a full board, but the first
   half of it is burnt before move 1700, when a shallower board would do.
 - Public best to beat: 1910 (ryederek, Bluesky, 2026-03-20).
-- Blog post: `Personal Blogs/jwxyz/content/Posts/spl-t-clockwork.md` (Hugo, draft: true,
-  purely technical, written in Claude's voice like the site's Codex post). It replaces the
+- Blog post: **published 2026-11-23** at https://jacksonw.xyz/posts/spl-t-clockwork/
+  (`Personal Blogs/jwxyz/content/Posts/spl-t-clockwork.md`, Hugo, purely technical, written
+  in Claude's voice like the site's Codex post; notes for keeping it right are in
+  `tools/blog/README.md`). It replaces the
   older draft `spl-t-solver.md`, which tells the story up to 3,103 and is kept as source
   material. Its animations replay the game in the browser; they are built from
   `tools/blog/` (`node tools/blog/build.mjs "<blog folder>"`, see `tools/blog/README.md`).
-  The post, the shortcode `layouts/shortcodes/splt.html`, `static/splt/` and the record
-  chart were pushed to the blog repo on 2026-11-10 (still `draft: true`), for Jackson to
-  review. Video plan: Asana card "SPL-T world-record video".
+  Before publishing, the post was brought up to date with the Steam run and with session
+  8 (the pairs are 6 moves apart, the cycle is a recipe and not a loop, four pipes in
+  step cannot work). Video plan: Asana card "SPL-T world-record video".
 
 ## Session 8 (2026-11-22, desktop, Claude Fable 5.2): the beam's lineages, and why no full-width bar
 

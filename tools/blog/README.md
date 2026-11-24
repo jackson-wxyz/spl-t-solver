@@ -46,3 +46,30 @@ leave a short glow. `tween` plays one move at a time and slides blocks when they
 
 To feature another game, add it to `GAMES` in `build.mjs`, run the build, and change the
 move ranges in the post's shortcodes (they are specific to the 3898 game).
+
+## Keeping the post right
+
+The post went live on 2026-11-23 at https://jacksonw.xyz/posts/spl-t-clockwork/
+(`content/Posts/spl-t-clockwork.md` in the blog's repository). These notes used to sit in a
+comment at the top of the draft; a comment in the Markdown would be served with the page.
+
+- **If the best game changes**: the places to change are the description, the short
+  version, the table of 432 runs, "The record game, phase by phase" (its move numbers are
+  specific to the 3898 game) and the last two sections; then `GAMES` in `build.mjs`, the
+  shortcodes' move ranges, and `SOLVER` in `tools/analysis/record_history_chart.py` (run it
+  with the blog's `static/graphs/spl-t-record-history.png` as the output).
+- **Record status**: the best public claim is ryederek's 1,910 (Bluesky, 2026-03-20,
+  Legacy Collection screenshot; by hand or by computer is not stated). Their feed was
+  checked on 2026-11-23 and had nothing newer.
+- **Sources for the history section**: people are named from their own public posts and
+  pages. Josh Holder's page says he took the record with 1,196 (1,208 with human
+  assistance); his repository's commit message says "1053 without human aid, 1133 with
+  human aid". Craig Polley's site is offline, so his atoms-in-the-universe argument is
+  cited as quoted by Josh Holder. The 973, 1,170, 1,258 and 1,277 numbers and the dates
+  before 2026 come from ryederek's chart and are approximate. That chart spells it
+  "Jonathon Becker", Josh Holder's post "Jonathan"; the post follows the chart.
+- **The real-game figure**: `static/splt/steam-3898.png` is the middle of the Steam
+  version's game-over screen from the run of 2026-11-16 (`runs/steam/` here, see
+  `tools/steam/README.md`), doubled by pixel repetition.
+- **Not in the post**: the video (embed it once it exists), and the "SPL-T Clockwork" page
+  of charts, which is a private Claude artifact.
