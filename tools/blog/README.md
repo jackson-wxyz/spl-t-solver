@@ -71,5 +71,12 @@ comment at the top of the draft; a comment in the Markdown would be served with 
 - **The real-game figure**: `static/splt/steam-3898.png` is the middle of the Steam
   version's game-over screen from the run of 2026-11-16 (`runs/steam/` here, see
   `tools/steam/README.md`), doubled by pixel repetition.
-- **Not in the post**: the video (embed it once it exists), and the "SPL-T Clockwork" page
-  of charts, which is a private Claude artifact.
+- **The video** (added 2026-11-23) is Jackson's commentary,
+  https://youtu.be/5rtkFsE3hcQ, embedded at the top with Hugo's `youtube` shortcode. The
+  line under it says that the video is his and all the writing is Claude's.
+- **The lineage chart** (`static/graphs/spl-t-beam-lineages.png`, in "Count the depth"):
+  `python tools/analysis/beam_lineages.py OUT.png runs/keeper/trace/run2.ktr --size 9.6x6.8
+  --title "Rival families in the search, moves 2,600 to 3,898" --sub "..."`, from the
+  trace of the second record run (research log, "Session 8", "Reproduce").
+- **Not in the post**: the "SPL-T Clockwork" page of charts, which is a private Claude
+  artifact.

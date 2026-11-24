@@ -249,7 +249,9 @@ The Ryzen 7600 (6 cores, 65 W) should scale much better. For parameter sweeps,
   `tools/blog/` (`node tools/blog/build.mjs "<blog folder>"`, see `tools/blog/README.md`).
   Before publishing, the post was brought up to date with the Steam run and with session
   8 (the pairs are 6 moves apart, the cycle is a recipe and not a loop, four pipes in
-  step cannot work). Video plan: Asana card "SPL-T world-record video".
+  step cannot work). The same day the video (Jackson's commentary,
+  https://youtu.be/5rtkFsE3hcQ) was embedded at the top and the lineage chart added.
+  Video notes: Asana card "SPL-T world-record video".
 
 ## Session 8 (2026-11-22, desktop, Claude Fable 5.2): the beam's lineages, and why no full-width bar
 

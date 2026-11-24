@@ -32,6 +32,7 @@ const attrs = (s) => { const a = {}; for (const m of s.matchAll(/(\w+)="([^"]*)"
 const held = [];
 const hold = (html) => { held.push(html); return `\n\n@@HELD${held.length - 1}@@\n\n`; };
 src = src.replace(/\{\{<\s*rawhtml\s*>\}\}([\s\S]*?)\{\{<\s*\/rawhtml\s*>\}\}/g, (_, inner) => hold(inner));
+src = src.replace(/\{\{<\s*youtube\s+id="([\w-]+)"\s*>\}\}/g, (_, id) => hold(`<div style="position:relative;padding-bottom:56.25%;height:0;"><iframe src="https://www.youtube.com/embed/${id}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen title="YouTube video"></iframe></div>`));
 src = src.replace(/\{\{<\s*figure\s+([\s\S]*?)>\}\}/g, (_, a) => { const p = attrs(a); return hold(`<figure><img src="${p.src}" alt=""><figcaption>${inline(p.caption || '')}</figcaption></figure>`); });
 src = src.replace(/\{\{<\s*splt\s+([\s\S]*?)>\}\}/g, (_, a) => {
   const p = attrs(a);
